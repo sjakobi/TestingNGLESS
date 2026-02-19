@@ -24,12 +24,22 @@ library
       Control.Monad.Trans.Resource
       Interpret
   other-modules:
+      Control.Monad.Cont.Class
+      Control.Monad.Error.Class
+      Control.Monad.Except
       Control.Monad.IO.Unlift
       Control.Monad.Primitive
+      Control.Monad.Reader.Class
+      Control.Monad.RWS.Class
+      Control.Monad.State
+      Control.Monad.State.Class
+      Control.Monad.State.Lazy
+      Control.Monad.Trans
       Data.Conduit
       Data.Conduit.Binary
       Data.Conduit.Combinators
       Data.Primitive.Internal.Operations
+      Control.Monad.Writer.Class
       Paths_TestingNGLESS
   hs-source-dirs:
       NGLess/
@@ -46,7 +56,6 @@ library
     , bytestring
     , containers
     , exceptions
-    , mtl >=2.2
     , transformers
   default-language: Haskell2010
   if impl(ghc >=8.0)
@@ -70,7 +79,6 @@ executable testingNGLESS
       TestingNGLESS
     , base
     , bytestring
-    , mtl >=2.2
     , transformers
   default-language: Haskell2010
   if impl(ghc >=8.0)
