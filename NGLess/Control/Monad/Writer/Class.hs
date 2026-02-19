@@ -27,7 +27,6 @@
 
 module Control.Monad.Writer.Class (
     MonadWriter(..),
-    listens,
     censor,
   ) where
 
@@ -81,15 +80,6 @@ class (Monoid w, Monad m) => MonadWriter w m | m -> w where
     -- returns a value and a function, and returns the value, applying
     -- the function to the output.
     pass   :: m (a, w -> w) -> m a
-
--- | @'listens' f m@ is an action that executes the action @m@ and adds
--- the result of applying @f@ to the output to the value of the computation.
---
--- * @'listens' f m = 'liftM' (id *** f) ('listen' m)@
-listens :: MonadWriter w m => (w -> b) -> m a -> m (a, b)
-listens f m = do
-    ~(a, w) <- listen m
-    return (a, f w)
 
 -- | @'censor' f m@ is an action that executes the action @m@ and
 -- applies the function @f@ to its output, leaving the return value
