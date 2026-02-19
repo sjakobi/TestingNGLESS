@@ -1,4 +1,3 @@
-{-# LANGUAGE CPP #-}
 {-# LANGUAGE MagicHash #-}
 {-# LANGUAGE UnboxedTuples #-}
 {-# LANGUAGE TypeFamilies #-}
@@ -386,12 +385,6 @@ instance MonadUnliftIO m => MonadUnliftIO (IdentityT m) where
     withRunInIO $ \run ->
     inner (run . runIdentityT)
 
-#if __GLASGOW_HASKELL__ < 802
-type UnliftedType = TYPE 'PtrRepUnlifted
-#elif __GLASGOW_HASKELL__ < 902
-type UnliftedType = TYPE 'UnliftedRep
-#endif
-
 class Monad m => PrimMonad m where
   type PrimState m
 
@@ -423,18 +416,6 @@ instance PrimBase m => PrimBase (IdentityT m) where
   internal (IdentityT m) = internal m
   {-# INLINE internal #-}
 
-#if !MIN_VERSION_transformers(0,6,0)
-instance PrimMonad m => PrimMonad (ListT m) where
-  type PrimState (ListT m) = PrimState m
-  primitive = lift . primitive
-  {-# INLINE primitive #-}
-
-instance (Error e, PrimMonad m) => PrimMonad (ErrorT e m) where
-  type PrimState (ErrorT e m) = PrimState m
-  primitive = lift . primitive
-  {-# INLINE primitive #-}
-#endif
-
 instance PrimMonad m => PrimMonad (MaybeT m) where
   type PrimState (MaybeT m) = PrimState m
   primitive = lift . primitive
@@ -455,31 +436,26 @@ instance (Monoid w, PrimMonad m) => PrimMonad (WriterT w m) where
   primitive = lift . primitive
   {-# INLINE primitive #-}
 
-#if MIN_VERSION_transformers(0,5,6)
 instance (Monoid w, PrimMonad m) => PrimMonad (CPS.WriterT w m) where
   type PrimState (CPS.WriterT w m) = PrimState m
   primitive = lift . primitive
   {-# INLINE primitive #-}
-#endif
 
 instance (Monoid w, PrimMonad m) => PrimMonad (RWST r w s m) where
   type PrimState (RWST r w s m) = PrimState m
   primitive = lift . primitive
   {-# INLINE primitive #-}
 
-#if MIN_VERSION_transformers(0,5,6)
 instance (Monoid w, PrimMonad m) => PrimMonad (CPSRWS.RWST r w s m) where
   type PrimState (CPSRWS.RWST r w s m) = PrimState m
   primitive = lift . primitive
   {-# INLINE primitive #-}
-#endif
 
 instance PrimMonad m => PrimMonad (ExceptT e m) where
   type PrimState (ExceptT e m) = PrimState m
   primitive = lift . primitive
   {-# INLINE primitive #-}
 
-#if MIN_VERSION_transformers(0,5,3)
 instance ( Monoid w
          , PrimMonad m
          ) => PrimMonad (AccumT w m) where
@@ -491,7 +467,6 @@ instance PrimMonad m => PrimMonad (SelectT r m) where
   type PrimState (SelectT r m) = PrimState m
   primitive = lift . primitive
   {-# INLINE primitive #-}
-#endif
 
 instance PrimMonad m => PrimMonad (Strict.StateT s m) where
   type PrimState (Strict.StateT s m) = PrimState m
@@ -517,7 +492,6 @@ instance PrimBase (ST s) where
   internal (ST p) = p
   {-# INLINE internal #-}
 
-#if __GLASGOW_HASKELL__ >= 802
 instance PrimMonad (L.ST s) where
   type PrimState (L.ST s) = s
   primitive = L.strictToLazyST . primitive
@@ -526,7 +500,6 @@ instance PrimMonad (L.ST s) where
 instance PrimBase (L.ST s) where
   internal = internal . L.lazyToStrictST
   {-# INLINE internal #-}
-#endif
 
 class (PrimMonad m, s ~ PrimState m) => MonadPrim s m
 instance (PrimMonad m, s ~ PrimState m) => MonadPrim s m
@@ -743,9 +716,6 @@ instance MonadState s m => MonadState s (SelectT r m) where
     put = lift . put
     state = lift . state
 
-#if !MIN_VERSION_transformers(0,6,0)
-#endif
-
 data ReleaseType
     = ReleaseEarly
     | ReleaseNormal
@@ -800,7 +770,6 @@ instance MonadMask m => MonadMask (ResourceT m) where
   uninterruptibleMask a =
     ResourceT $ \e -> uninterruptibleMask $ \u -> unResourceT (a $ q u) e
       where q u (ResourceT b) = ResourceT (u . b)
-#if MIN_VERSION_exceptions(0, 10, 0)
   generalBracket acquire cleanup use =
     ResourceT $ \r ->
         generalBracket
@@ -809,9 +778,6 @@ instance MonadMask m => MonadMask (ResourceT m) where
                   unResourceT ( cleanup resource exitCase ) r
             )
             ( \resource -> unResourceT ( use resource ) r )
-#elif MIN_VERSION_exceptions(0, 9, 0)
-#error exceptions 0.9.0 is not supported
-#endif
 instance MonadIO m => MonadResource (ResourceT m) where
     liftResourceT = transResourceT liftIO
 instance PrimMonad m => PrimMonad (ResourceT m) where
@@ -882,24 +848,38 @@ instance MonadUnliftIO m => MonadUnliftIO (ResourceT m) where
     withRunInIO $ \run ->
     inner (run . flip unResourceT r)
 
-#define GO(T) instance (MonadResource m) => MonadResource (T m) where liftResourceT = lift . liftResourceT
-#define GOX(X, T) instance (X, MonadResource m) => MonadResource (T m) where liftResourceT = lift . liftResourceT
-GO(IdentityT)
-#if !MIN_VERSION_transformers(0,6,0)
-GO(ListT)
-#endif
-GO(MaybeT)
-GO(ExceptT e)
-GO(ReaderT r)
-GO(ContT r)
-GO(StateT s)
-GOX(Monoid w, WriterT w)
-GOX(Monoid w, RWST r w s)
-GOX(Monoid w, Strict.RWST r w s)
-GO(Strict.StateT s)
-GOX(Monoid w, Strict.WriterT w)
-#undef GO
-#undef GOX
+instance MonadResource m => MonadResource (IdentityT m) where
+  liftResourceT = lift . liftResourceT
+
+instance MonadResource m => MonadResource (MaybeT m) where
+  liftResourceT = lift . liftResourceT
+
+instance MonadResource m => MonadResource (ExceptT e m) where
+  liftResourceT = lift . liftResourceT
+
+instance MonadResource m => MonadResource (ReaderT r m) where
+  liftResourceT = lift . liftResourceT
+
+instance MonadResource m => MonadResource (ContT r m) where
+  liftResourceT = lift . liftResourceT
+
+instance MonadResource m => MonadResource (StateT s m) where
+  liftResourceT = lift . liftResourceT
+
+instance (Monoid w, MonadResource m) => MonadResource (WriterT w m) where
+  liftResourceT = lift . liftResourceT
+
+instance (Monoid w, MonadResource m) => MonadResource (RWST r w s m) where
+  liftResourceT = lift . liftResourceT
+
+instance (Monoid w, MonadResource m) => MonadResource (Strict.RWST r w s m) where
+  liftResourceT = lift . liftResourceT
+
+instance MonadResource m => MonadResource (Strict.StateT s m) where
+  liftResourceT = lift . liftResourceT
+
+instance (Monoid w, MonadResource m) => MonadResource (Strict.WriterT w m) where
+  liftResourceT = lift . liftResourceT
 
 register' :: I.IORef ReleaseMap
           -> IO ()
@@ -1111,10 +1091,6 @@ instance
     listen = Accum.liftListen listen
     pass   = Accum.liftPass pass
 
-#ifndef MIN_VERSION_mtl
-#define MIN_VERSION_mtl(x, y, z) 0
-#endif
-
 data Pipe l i o u m r =
     HaveOutput (Pipe l i o u m r) o
   | NeedInput (i -> Pipe l i o u m r) (u -> Pipe l i o u m r)
@@ -1161,10 +1137,6 @@ instance Monad m => Semigroup (Pipe l i o u m ()) where
 instance Monad m => Monoid (Pipe l i o u m ()) where
     mempty = return ()
     {-# INLINE mempty #-}
-#if !(MIN_VERSION_base(4,11,0))
-    mappend = (<>)
-    {-# INLINE mappend #-}
-#endif
 
 instance PrimMonad m => PrimMonad (Pipe l i o u m) where
   type PrimState (Pipe l i o u m) = PrimState m
@@ -1184,9 +1156,7 @@ instance MonadReader r m => MonadReader r (Pipe l i o u m) where
     local f (Leftover p i) = Leftover (local f p) i
 
 instance MonadWriter w m => MonadWriter w (Pipe l i o u m) where
-#if MIN_VERSION_mtl(2, 1, 0)
     writer = lift . writer
-#endif
     tell = lift . tell
 
     listen (HaveOutput p o) = HaveOutput (listen p) o
@@ -1208,9 +1178,7 @@ instance MonadWriter w m => MonadWriter w (Pipe l i o u m) where
 instance MonadState s m => MonadState s (Pipe l i o u m) where
     get = lift get
     put = lift . put
-#if MIN_VERSION_mtl(2, 1, 0)
     state = lift . state
-#endif
 
 instance MonadRWS r w s m => MonadRWS r w s (Pipe l i o u m)
 
@@ -1282,9 +1250,7 @@ instance MonadReader r m => MonadReader r (ConduitT i o m) where
          in go (c0 Done)
 
 instance MonadWriter w m => MonadWriter w (ConduitT i o m) where
-#if MIN_VERSION_mtl(2, 1, 0)
     writer = lift . writer
-#endif
     tell = lift . tell
 
     listen (ConduitT c0) = ConduitT $ \rest ->
@@ -1312,9 +1278,7 @@ instance MonadWriter w m => MonadWriter w (ConduitT i o m) where
 instance MonadState s m => MonadState s (ConduitT i o m) where
     get = lift get
     put = lift . put
-#if MIN_VERSION_mtl(2, 1, 0)
     state = lift . state
-#endif
 
 instance MonadRWS r w s m => MonadRWS r w s (ConduitT i o m)
 
@@ -1345,10 +1309,6 @@ instance Monad m => Semigroup (ConduitT i o m ()) where
 instance Monad m => Monoid (ConduitT i o m ()) where
     mempty = return ()
     {-# INLINE mempty #-}
-#if !(MIN_VERSION_base(4,11,0))
-    mappend = (<>)
-    {-# INLINE mappend #-}
-#endif
 
 instance PrimMonad m => PrimMonad (ConduitT i o m) where
   type PrimState (ConduitT i o m) = PrimState m
