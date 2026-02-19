@@ -17,7 +17,6 @@
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE QuantifiedConstraints #-}
 
-{-# OPTIONS_HADDOCK not-home #-}
 {-# OPTIONS_GHC -O2 #-}
 {-# OPTIONS_GHC -fno-warn-deprecations #-}
 {-# OPTIONS_GHC -Wno-redundant-constraints #-}
