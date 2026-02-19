@@ -45,12 +45,6 @@ The Error monad (also called the Exception monad).
 -}
 module Control.Monad.Error.Class (
     MonadError(..),
-    liftEither,
-    tryError,
-    withError,
-    handleError,
-    mapError,
-    modifyError,
   ) where
 
 import Control.Monad.Trans.Except (ExceptT)
@@ -110,18 +104,6 @@ class (Monad m) => MonadError e m | m -> e where
     -}
     catchError :: m a -> (e -> m a) -> m a
     {-# MINIMAL throwError, catchError #-}
-
-{- |
-Lifts an @'Either' e@ into any @'MonadError' e@.
-
-> do { val <- liftEither =<< action1; action2 }
-
-where @action1@ returns an 'Either' to represent errors.
-
-@since 2.2.2
--}
-liftEither :: MonadError e m => Either e a -> m a
-liftEither = either throwError pure
 
 instance MonadError IOException IO where
     throwError = ioError
@@ -205,66 +187,3 @@ instance
   ) => MonadError e (AccumT w m) where
     throwError = lift . throwError
     catchError = Accum.liftCatch catchError
-
--- | 'MonadError' analogue to the 'Control.Exception.try' function.
-tryError :: MonadError e m => m a -> m (Either e a)
-tryError action = (Right <$> action) `catchError` (pure . Left)
-
--- | 'MonadError' analogue to the 'withExceptT' function.
--- Modify the value (but not the type) of an error.  The type is
--- fixed because of the functional dependency @m -> e@.  If you need
--- to change the type of @e@ use 'mapError' or 'modifyError'.
-withError :: MonadError e m => (e -> e) -> m a -> m a
-withError f action = tryError action >>= either (throwError . f) pure
-
--- | As 'handle' is flipped 'Control.Exception.catch', 'handleError'
--- is flipped 'catchError'.
-handleError :: MonadError e m => (e -> m a) -> m a -> m a
-handleError = flip catchError
-
--- | 'MonadError' analogue of the 'mapExceptT' function.  The
--- computation is unwrapped, a function is applied to the @Either@, and
--- the result is lifted into the second 'MonadError' instance.
-mapError :: (MonadError e m, MonadError e' n) => (m (Either e a) -> n (Either e' b)) -> m a -> n b
-mapError f action = f (tryError action) >>= liftEither
-
-{- |
-A different 'MonadError' analogue to the 'withExceptT' function.
-Modify the value (and possibly the type) of an error in an @ExceptT@-transformed
-monad, while stripping the @ExceptT@ layer.
-
-This is useful for adapting the 'MonadError' constraint of a computation.
-
-For example:
-
-> data DatabaseError = ...
->
-> performDatabaseQuery :: (MonadError DatabaseError m, ...) => m PersistedValue
->
-> data AppError
->   = MkDatabaseError DatabaseError
->   | ...
->
-> app :: (MonadError AppError m, ...) => m ()
-
-Given these types, @performDatabaseQuery@ cannot be used directly inside
-@app@, because the error types don't match. Using 'modifyError', an equivalent
-function with a different error type can be constructed:
-
-> performDatabaseQuery' :: (MonadError AppError m, ...) => m PersistedValue
-> performDatabaseQuery' = modifyError MkDatabaseError performDatabaseQuery
-
-Since the error types do match, @performDatabaseQuery'@ _can_ be used in @app@,
-assuming all other constraints carry over.
-
-This works by instantiating the @m@ in the type of @performDatabaseQuery@ to
-@ExceptT DatabaseError m'@, which satisfies the @MonadError DatabaseError@
-constraint. Immediately, the @ExceptT DatabaseError@ layer is unwrapped,
-producing 'Either' a @DatabaseError@ or a @PersistedValue@. If it's the former,
-the error is wrapped in @MkDatabaseError@ and re-thrown in the inner monad,
-otherwise the result value is returned.
-
-@since 2.3.1
--}
-modifyError :: MonadError e' m => (e -> e') -> ExceptT e m a -> m a
-modifyError f m = ExceptT.runExceptT m >>= either (throwError . f) pure
