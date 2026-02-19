@@ -40,13 +40,15 @@ module Control.Monad.State.Lazy (
     execStateT,
     mapStateT,
     withStateT,
-    module Control.Monad.Trans,
+    module Control.Monad.Trans.Class,
+    module Control.Monad.IO.Class,
     -- * Examples
     -- $examples
   ) where
 
 import qualified Control.Monad.State.Class as MonadState
-import Control.Monad.Trans
+import Control.Monad.IO.Class
+import Control.Monad.Trans.Class
 
 import Control.Monad.Trans.State.Lazy
         (State, runState, evalState, execState, mapState, withState,

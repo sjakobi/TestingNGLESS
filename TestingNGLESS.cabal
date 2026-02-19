@@ -33,7 +33,6 @@ library
       Control.Monad.State
       Control.Monad.State.Class
       Control.Monad.State.Lazy
-      Control.Monad.Trans
       Data.Conduit
       Data.Conduit.Binary
       Data.Conduit.Combinators
