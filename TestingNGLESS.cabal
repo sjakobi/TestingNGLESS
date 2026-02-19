@@ -24,7 +24,6 @@ library
       Control.Monad.Trans.Resource
       Interpret
   other-modules:
-      Control.Monad.Trans.Resource.Internal
       Data.Conduit
       Data.Conduit.Binary
       Data.Conduit.Combinators
