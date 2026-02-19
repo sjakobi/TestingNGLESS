@@ -1,4 +1,3 @@
-{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE RankNTypes #-}
 
 {-# OPTIONS_GHC -O2 #-}
@@ -21,20 +20,8 @@ import Control.Concurrent ()
 import Control.Exception
     ( throw, Exception, SomeException )
 import Control.Monad ( ap, liftM, MonadPlus(..), unless )
-import Control.Monad.Catch
-    ( MonadThrow(..), MonadCatch(..), MonadMask(..) )
-import Control.Monad.Fail ( MonadFail(..) )
-import Control.Monad.Fix ( MonadFix(..) )
 import Control.Monad.IO.Class ( MonadIO(..) )
 import Control.Monad.Trans.Class ( MonadTrans(..) )
-import Control.Monad.Trans.Cont ( ContT )
-import Control.Monad.Trans.Except ( ExceptT )
-import Control.Monad.Trans.Identity
-    ( IdentityT, IdentityT(..) )
-import Control.Monad.Trans.Maybe ( MaybeT )
-import Control.Monad.Trans.Reader
-    ( ReaderT, ReaderT(..) )
-import Control.Monad.Trans.State ( StateT )
 import Data.ByteString ( ByteString )
 import Data.ByteString.Lazy.Internal ( defaultChunkSize )
 import Data.IntMap ( IntMap )
@@ -50,8 +37,6 @@ import Prelude
       Num((+), (-)),
       Show(show),
       Applicative((<*), pure, (<*>), (*>)),
-      Semigroup(..),
-      Monoid(mempty),
       Bool,
       String,
       Int,
@@ -60,7 +45,6 @@ import Prelude
       const,
       (.),
       id,
-      flip,
       concat,
       reverse,
       FilePath,
@@ -84,20 +68,6 @@ instance MonadUnliftIO IO where
   {-# INLINE withRunInIO #-}
   withRunInIO inner = inner id
 
-instance MonadUnliftIO m => MonadUnliftIO (ReaderT r m) where
-  {-# INLINE withRunInIO #-}
-  withRunInIO inner =
-    ReaderT $ \r ->
-    withRunInIO $ \run ->
-    inner (run . flip runReaderT r)
-
-instance MonadUnliftIO m => MonadUnliftIO (IdentityT m) where
-  {-# INLINE withRunInIO #-}
-  withRunInIO inner =
-    IdentityT $
-    withRunInIO $ \run ->
-    inner (run . runIdentityT)
-
 data ReleaseType
     = ReleaseEarly
     | ReleaseNormal
@@ -116,25 +86,6 @@ data ReleaseMap =
     ReleaseMap !NextKey !RefCount !(IntMap (ReleaseType -> IO ()))
   | ReleaseMapClosed
 
-instance MonadThrow m => MonadThrow (ResourceT m) where
-    throwM = lift . throwM
-instance MonadCatch m => MonadCatch (ResourceT m) where
-  catch (ResourceT m) c =
-      ResourceT $ \r -> m r `catch` \e -> unResourceT (c e) r
-instance MonadMask m => MonadMask (ResourceT m) where
-  mask a = ResourceT $ \e -> mask $ \u -> unResourceT (a $ q u) e
-    where q u (ResourceT b) = ResourceT (u . b)
-  uninterruptibleMask a =
-    ResourceT $ \e -> uninterruptibleMask $ \u -> unResourceT (a $ q u) e
-      where q u (ResourceT b) = ResourceT (u . b)
-  generalBracket acquire cleanup use =
-    ResourceT $ \r ->
-        generalBracket
-            ( unResourceT acquire r )
-            ( \resource exitCase ->
-                  unResourceT ( cleanup resource exitCase ) r
-            )
-            ( \resource -> unResourceT ( use resource ) r )
 instance MonadIO m => MonadResource (ResourceT m) where
     liftResourceT = transResourceT liftIO
 
@@ -143,7 +94,7 @@ transResourceT :: (m a -> n b)
                -> ResourceT n b
 transResourceT f (ResourceT mx) = ResourceT (\r -> f (mx r))
 
-newtype ResourceT m a = ResourceT { unResourceT :: I.IORef ReleaseMap -> m a }
+newtype ResourceT m a = ResourceT { _unResourceT :: I.IORef ReleaseMap -> m a }
 
 data InvalidAccess = InvalidAccess String
 
@@ -183,42 +134,11 @@ instance Monad m => Monad (ResourceT m) where
         let ResourceT f' = f a
         f' r
 
-instance MonadFail m => MonadFail (ResourceT m) where
-    fail = lift . Control.Monad.Fail.fail
-
-instance MonadFix m => MonadFix (ResourceT m) where
-  mfix f = ResourceT $ \r -> mfix $ \a -> unResourceT (f a) r
-
 instance MonadTrans ResourceT where
     lift = ResourceT . const
 
 instance MonadIO m => MonadIO (ResourceT m) where
     liftIO = lift . liftIO
-
-instance MonadUnliftIO m => MonadUnliftIO (ResourceT m) where
-  {-# INLINE withRunInIO #-}
-  withRunInIO inner =
-    ResourceT $ \r ->
-    withRunInIO $ \run ->
-    inner (run . flip unResourceT r)
-
-instance MonadResource m => MonadResource (IdentityT m) where
-  liftResourceT = lift . liftResourceT
-
-instance MonadResource m => MonadResource (MaybeT m) where
-  liftResourceT = lift . liftResourceT
-
-instance MonadResource m => MonadResource (ExceptT e m) where
-  liftResourceT = lift . liftResourceT
-
-instance MonadResource m => MonadResource (ReaderT r m) where
-  liftResourceT = lift . liftResourceT
-
-instance MonadResource m => MonadResource (ContT r m) where
-  liftResourceT = lift . liftResourceT
-
-instance MonadResource m => MonadResource (StateT s m) where
-  liftResourceT = lift . liftResourceT
 
 register' :: I.IORef ReleaseMap
           -> IO ()
@@ -360,18 +280,6 @@ instance MonadIO m => MonadIO (Pipe l i o u m) where
     liftIO = lift . liftIO
     {-# INLINE liftIO #-}
 
-instance MonadThrow m => MonadThrow (Pipe l i o u m) where
-    throwM = lift . throwM
-    {-# INLINE throwM #-}
-
-instance Monad m => Semigroup (Pipe l i o u m ()) where
-    (<>) = (>>)
-    {-# INLINE (<>) #-}
-
-instance Monad m => Monoid (Pipe l i o u m ()) where
-    mempty = return ()
-    {-# INLINE mempty #-}
-
 instance MonadResource m => MonadResource (Pipe l i o u m) where
     liftResourceT = lift . liftResourceT
     {-# INLINE liftResourceT #-}
@@ -413,12 +321,6 @@ instance Monad (ConduitT i o m) where
     return = pure
     ConduitT f >>= g = ConduitT $ \h -> f $ \a -> unConduitT (g a) h
 
-instance MonadFail m => MonadFail (ConduitT i o m) where
-    fail = lift . Control.Monad.Fail.fail
-
-instance MonadThrow m => MonadThrow (ConduitT i o m) where
-    throwM = lift . throwM
-
 instance MonadIO m => MonadIO (ConduitT i o m) where
     liftIO = lift . liftIO
     {-# INLINE liftIO #-}
@@ -426,18 +328,6 @@ instance MonadIO m => MonadIO (ConduitT i o m) where
 instance MonadTrans (ConduitT i o) where
     lift mr = ConduitT $ \rest -> PipeM (liftM rest mr)
     {-# INLINE [1] lift #-}
-
-instance MonadResource m => MonadResource (ConduitT i o m) where
-    liftResourceT = lift . liftResourceT
-    {-# INLINE liftResourceT #-}
-
-instance Monad m => Semigroup (ConduitT i o m ()) where
-    (<>) = (>>)
-    {-# INLINE (<>) #-}
-
-instance Monad m => Monoid (ConduitT i o m ()) where
-    mempty = return ()
-    {-# INLINE mempty #-}
 
 infixr 2 .|
 (.|) :: Monad m
