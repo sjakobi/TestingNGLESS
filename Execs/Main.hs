@@ -2,9 +2,8 @@ module Main
     ( main
     ) where
 
-import Control.Monad.Trans.Resource
+import Deps (runResourceT)
 import Interpret
 
 main = runResourceT $ interpret [()]
-
 

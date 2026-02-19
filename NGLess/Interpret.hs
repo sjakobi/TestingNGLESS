@@ -3,13 +3,14 @@ module Interpret
     ) where
 import qualified Data.ByteString as B
 
-import qualified Data.Conduit as C
-import qualified Data.Conduit.Combinators as CC
-import qualified Data.Conduit.Binary as CB
-import           Data.Conduit ((.|))
+import qualified Deps as C
+import qualified Deps as CC
+import qualified Deps as CB
+import           Deps ((.|), ResourceT)
 import           Control.Monad
-import           Control.Monad.State
-import           Control.Monad.Trans.Resource
+import           Control.Monad.IO.Class (liftIO)
+import           Control.Monad.Trans.Class (lift)
+import           Control.Monad.Trans.State.Lazy (StateT, evalStateT)
 
 type NGLessIO = ResourceT IO
 type InterpretationEnvIO = StateT  () NGLessIO
@@ -46,5 +47,3 @@ parseFile istream = do
                 liftIO $ print c
                 return ()
     return "test.txt"
-
-
