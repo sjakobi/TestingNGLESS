@@ -36,7 +36,6 @@ library
       Data.Conduit
       Data.Conduit.Binary
       Data.Conduit.Combinators
-      Data.Primitive.Internal.Operations
       Control.Monad.Writer.Class
       Paths_TestingNGLESS
   hs-source-dirs:

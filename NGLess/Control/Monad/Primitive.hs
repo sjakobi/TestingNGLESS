@@ -35,11 +35,16 @@ module Control.Monad.Primitive (
 import Data.Kind (Type)
 
 import GHC.Exts   ( State#, RealWorld, noDuplicate#, touch#
-                  , unsafeCoerce#, realWorld#, seq# )
-import Data.Primitive.Internal.Operations (UnliftedType)
-#if defined(HAVE_KEEPALIVE)
-import Data.Primitive.Internal.Operations (keepAliveLiftedLifted#,keepAliveUnliftedLifted#)
+                  , unsafeCoerce#, realWorld#, seq#
+                  , TYPE
+#if __GLASGOW_HASKELL__ >= 902
+                  , UnliftedType
 #endif
+#if defined(HAVE_KEEPALIVE)
+                  , keepAliveLiftedLifted#
+                  , keepAliveUnliftedLifted#
+#endif
+                  )
 import GHC.IO     ( IO(..) )
 import GHC.ST     ( ST(..) )
 
@@ -77,6 +82,12 @@ import qualified Control.Monad.Trans.RWS.CPS as CPS
 import qualified Control.Monad.Trans.RWS.Strict    as Strict ( RWST   )
 import qualified Control.Monad.Trans.State.Strict  as Strict ( StateT )
 import qualified Control.Monad.Trans.Writer.Strict as Strict ( WriterT )
+
+#if __GLASGOW_HASKELL__ < 802
+type UnliftedType = TYPE 'PtrRepUnlifted
+#elif __GLASGOW_HASKELL__ < 902
+type UnliftedType = TYPE 'UnliftedRep
+#endif
 
 -- | Class of monads which can perform primitive state-transformer actions.
 class Monad m => PrimMonad m where
