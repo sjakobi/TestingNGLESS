@@ -8,9 +8,7 @@ import qualified Data.Conduit.Combinators as CC
 import qualified Data.Conduit.Binary as CB
 import           Data.Conduit ((.|))
 import           Control.Monad
-import           Control.Monad.Except
 import           Control.Monad.State
-import           Control.Monad.IO.Class   (liftIO)
 import           Control.Monad.Trans.Resource
 
 type NGLessIO = ResourceT IO
