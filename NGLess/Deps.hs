@@ -1,11 +1,5 @@
-{-# LANGUAGE MagicHash #-}
-{-# LANGUAGE UnboxedTuples #-}
-{-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE UndecidableInstances #-}
-{-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE FunctionalDependencies #-}
 
 {-# OPTIONS_GHC -O2 #-}
 {-# OPTIONS_GHC -fno-warn-deprecations #-}
@@ -45,9 +39,7 @@ import Data.ByteString ( ByteString )
 import Data.ByteString.Lazy.Internal ( defaultChunkSize )
 import Data.IntMap ( IntMap )
 import Data.Void ( Void, absurd )
-import GHC.Exts ( RealWorld, State# )
 import GHC.IO ( IO(..) )
-import GHC.ST ( ST(..) )
 import Prelude
     ( otherwise,
       ($),
@@ -64,7 +56,6 @@ import Prelude
       String,
       Int,
       Maybe(..),
-      type (~),
       Word,
       const,
       (.),
@@ -83,8 +74,6 @@ import qualified System.IO as IO
     ( hClose, IOMode(ReadMode), Handle, openBinaryFile )
 import qualified Data.IntMap as IntMap
     ( delete, elems, empty, insert, lookup )
-import qualified Control.Monad.ST.Lazy as L
-    ( lazyToStrictST, strictToLazyST, ST )
 import qualified Data.ByteString as S
     ( concat, drop, elemIndex, hGetSome, null, splitAt, ByteString )
 
@@ -108,81 +97,6 @@ instance MonadUnliftIO m => MonadUnliftIO (IdentityT m) where
     IdentityT $
     withRunInIO $ \run ->
     inner (run . runIdentityT)
-
-class Monad m => PrimMonad m where
-  type PrimState m
-
-  primitive :: (State# (PrimState m) -> (# State# (PrimState m), a #)) -> m a
-
-class PrimMonad m => PrimBase m where
-  internal :: m a -> State# (PrimState m) -> (# State# (PrimState m), a #)
-
-instance PrimMonad IO where
-  type PrimState IO = RealWorld
-  primitive = IO
-  {-# INLINE primitive #-}
-
-instance PrimBase IO where
-  internal (IO p) = p
-  {-# INLINE internal #-}
-
-instance PrimMonad m => PrimMonad (ContT r m) where
-  type PrimState (ContT r m) = PrimState m
-  primitive = lift . primitive
-  {-# INLINE primitive #-}
-
-instance PrimMonad m => PrimMonad (IdentityT m) where
-  type PrimState (IdentityT m) = PrimState m
-  primitive = lift . primitive
-  {-# INLINE primitive #-}
-
-instance PrimBase m => PrimBase (IdentityT m) where
-  internal (IdentityT m) = internal m
-  {-# INLINE internal #-}
-
-instance PrimMonad m => PrimMonad (MaybeT m) where
-  type PrimState (MaybeT m) = PrimState m
-  primitive = lift . primitive
-  {-# INLINE primitive #-}
-
-instance PrimMonad m => PrimMonad (ReaderT r m) where
-  type PrimState (ReaderT r m) = PrimState m
-  primitive = lift . primitive
-  {-# INLINE primitive #-}
-
-instance PrimMonad m => PrimMonad (StateT s m) where
-  type PrimState (StateT s m) = PrimState m
-  primitive = lift . primitive
-  {-# INLINE primitive #-}
-
-instance PrimMonad m => PrimMonad (ExceptT e m) where
-  type PrimState (ExceptT e m) = PrimState m
-  primitive = lift . primitive
-  {-# INLINE primitive #-}
-
-instance PrimMonad (ST s) where
-  type PrimState (ST s) = s
-  primitive = ST
-  {-# INLINE primitive #-}
-
-instance PrimBase (ST s) where
-  internal (ST p) = p
-  {-# INLINE internal #-}
-
-instance PrimMonad (L.ST s) where
-  type PrimState (L.ST s) = s
-  primitive = L.strictToLazyST . primitive
-  {-# INLINE primitive #-}
-
-instance PrimBase (L.ST s) where
-  internal = internal . L.lazyToStrictST
-  {-# INLINE internal #-}
-
-class (PrimMonad m, s ~ PrimState m) => MonadPrim s m
-instance (PrimMonad m, s ~ PrimState m) => MonadPrim s m
-
-class (PrimBase m, MonadPrim s m) => MonadPrimBase s m
-instance (PrimBase m, MonadPrim s m) => MonadPrimBase s m
 
 data ReleaseType
     = ReleaseEarly
@@ -223,9 +137,6 @@ instance MonadMask m => MonadMask (ResourceT m) where
             ( \resource -> unResourceT ( use resource ) r )
 instance MonadIO m => MonadResource (ResourceT m) where
     liftResourceT = transResourceT liftIO
-instance PrimMonad m => PrimMonad (ResourceT m) where
-    type PrimState (ResourceT m) = PrimState m
-    primitive = lift . primitive
 
 transResourceT :: (m a -> n b)
                -> ResourceT m a
@@ -461,10 +372,6 @@ instance Monad m => Monoid (Pipe l i o u m ()) where
     mempty = return ()
     {-# INLINE mempty #-}
 
-instance PrimMonad m => PrimMonad (Pipe l i o u m) where
-  type PrimState (Pipe l i o u m) = PrimState m
-  primitive = lift . primitive
-
 instance MonadResource m => MonadResource (Pipe l i o u m) where
     liftResourceT = lift . liftResourceT
     {-# INLINE liftResourceT #-}
@@ -531,10 +438,6 @@ instance Monad m => Semigroup (ConduitT i o m ()) where
 instance Monad m => Monoid (ConduitT i o m ()) where
     mempty = return ()
     {-# INLINE mempty #-}
-
-instance PrimMonad m => PrimMonad (ConduitT i o m) where
-  type PrimState (ConduitT i o m) = PrimState m
-  primitive = lift . primitive
 
 infixr 2 .|
 (.|) :: Monad m
