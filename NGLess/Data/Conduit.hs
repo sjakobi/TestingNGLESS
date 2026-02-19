@@ -9,6 +9,7 @@
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE Trustworthy #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# OPTIONS_GHC -O2 #-}
 module Data.Conduit
     ( -- ** Types
       ConduitT (..)

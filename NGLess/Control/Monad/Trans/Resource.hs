@@ -7,6 +7,7 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE ConstraintKinds #-}
+{-# OPTIONS_GHC -O2 #-}
 -- | Allocate resources which are guaranteed to be released.
 --
 -- For more information, see <https://github.com/snoyberg/conduit/tree/master/resourcet#readme>.

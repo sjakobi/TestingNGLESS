@@ -1,5 +1,6 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE RankNTypes #-}
+{-# OPTIONS_GHC -O2 #-}
 
 module Data.Conduit.Combinators
   ( sourceFile
