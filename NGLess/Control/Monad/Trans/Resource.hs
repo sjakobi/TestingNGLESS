@@ -66,7 +66,6 @@ import Control.Monad.Trans.Resource.Internal
 import Control.Concurrent (ThreadId, forkIO)
 
 import Control.Monad.Catch (MonadThrow, throwM)
-import Data.Acquire.Internal (ReleaseType (..))
 
 
 

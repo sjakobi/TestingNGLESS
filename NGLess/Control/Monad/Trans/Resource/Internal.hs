@@ -13,6 +13,7 @@ module Control.Monad.Trans.Resource.Internal(
   , MonadResource(..)
   , ReleaseKey(..)
   , ReleaseMap(..)
+  , ReleaseType(..)
   , ResIO
   , ResourceT(..)
   , stateAlloc
@@ -65,7 +66,13 @@ import qualified Data.IntMap as IntMap
 import qualified Data.IORef as I
 import Data.Typeable
 import Data.Word(Word)
-import Data.Acquire.Internal (ReleaseType (..))
+
+-- | The way in which a release is called.
+data ReleaseType
+    = ReleaseEarly
+    | ReleaseNormal
+    | ReleaseExceptionWith E.SomeException
+    deriving (Show, Typeable)
 
 -- | A @Monad@ which allows for safe resource allocation. In theory, any monad
 -- transformer stack which includes a @ResourceT@ can be an instance of
