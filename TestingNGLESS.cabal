@@ -1,0 +1,78 @@
+cabal-version: 1.12
+
+-- This file has been generated from package.yaml by hpack version 0.37.0.
+--
+-- see: https://github.com/sol/hpack
+
+name:           TestingNGLESS
+version:        0.7.0
+category:       Domain Specific Language
+homepage:       https://github.com/luispedro/ngless#readme
+bug-reports:    https://github.com/luispedro/ngless/issues
+author:         Luis Pedro Coelho and others (see AUTHORS)
+maintainer:     luis@luispedro.org
+license:        MIT
+license-file:   COPYING
+build-type:     Simple
+
+source-repository head
+  type: git
+  location: https://github.com/luispedro/ngless
+
+library
+  exposed-modules:
+      Interpret
+  other-modules:
+      Paths_TestingNGLESS
+  hs-source-dirs:
+      NGLess/
+  default-extensions:
+      BangPatterns
+      OverloadedStrings
+      LambdaCase
+      TupleSections
+  other-extensions:
+      DeriveDataTypeable
+      TemplateHaskell
+  build-depends:
+      base
+    , bytestring
+    , conduit
+    , conduit-combinators
+    , conduit-extra >=1.1.12
+    , mtl >=2.2
+    , resourcet >=1.1
+    , transformers
+  default-language: Haskell2010
+  if impl(ghc >=8.0)
+    ghc-options: -Wall -fwarn-tabs -fno-warn-missing-signatures -threaded -rtsopts "-with-rtsopts=-A64m -n4m -H"
+  else
+    ghc-options: -Wall -fwarn-tabs -fno-warn-missing-signatures -threaded -rtsopts "-with-rtsopts=-A64m -n4m -H -qg"
+
+executable testingNGLESS
+  main-is: Main.hs
+  hs-source-dirs:
+      Execs
+  default-extensions:
+      BangPatterns
+      OverloadedStrings
+      LambdaCase
+      TupleSections
+  other-extensions:
+      DeriveDataTypeable
+      TemplateHaskell
+  build-depends:
+      TestingNGLESS
+    , base
+    , bytestring
+    , conduit
+    , conduit-combinators
+    , conduit-extra >=1.1.12
+    , mtl >=2.2
+    , resourcet >=1.1
+    , transformers
+  default-language: Haskell2010
+  if impl(ghc >=8.0)
+    ghc-options: -Wall -fwarn-tabs -fno-warn-missing-signatures -threaded -rtsopts "-with-rtsopts=-A64m -n4m -H"
+  else
+    ghc-options: -Wall -fwarn-tabs -fno-warn-missing-signatures -threaded -rtsopts "-with-rtsopts=-A64m -n4m -H -qg"
