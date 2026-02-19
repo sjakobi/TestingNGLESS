@@ -23,18 +23,8 @@ library
   exposed-modules:
       Deps
       Interpret
-  other-modules:
-      Paths_TestingNGLESS
   hs-source-dirs:
       NGLess/
-  default-extensions:
-      BangPatterns
-      OverloadedStrings
-      LambdaCase
-      TupleSections
-  other-extensions:
-      DeriveDataTypeable
-      TemplateHaskell
   build-depends:
       base
     , bytestring
@@ -51,14 +41,6 @@ executable testingNGLESS
   main-is: Main.hs
   hs-source-dirs:
       Execs
-  default-extensions:
-      BangPatterns
-      OverloadedStrings
-      LambdaCase
-      TupleSections
-  other-extensions:
-      DeriveDataTypeable
-      TemplateHaskell
   build-depends:
       TestingNGLESS
     , base
