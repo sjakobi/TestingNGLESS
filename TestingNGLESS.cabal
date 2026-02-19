@@ -25,7 +25,6 @@ library
       Interpret
   other-modules:
       Control.Monad.Trans.Resource.Internal
-      Data.Acquire
       Data.Acquire.Internal
       Data.Conduit
       Data.Conduit.Binary
