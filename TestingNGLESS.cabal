@@ -26,7 +26,6 @@ library
   other-modules:
       Control.Monad.Cont.Class
       Control.Monad.Error.Class
-      Control.Monad.Except
       Control.Monad.IO.Unlift
       Control.Monad.Primitive
       Control.Monad.Reader.Class
