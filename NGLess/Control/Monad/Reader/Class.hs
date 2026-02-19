@@ -48,7 +48,6 @@ than using the 'Control.Monad.State.State' monad.
 
 module Control.Monad.Reader.Class (
     MonadReader(..),
-    asks,
     ) where
 
 import qualified Control.Monad.Trans.Cont as Cont
@@ -95,12 +94,6 @@ class Monad m => MonadReader r m | m -> r where
     reader f = do
       r <- ask
       return (f r)
-
--- | Retrieves a function of the current environment.
-asks :: MonadReader r m
-    => (r -> a) -- ^ The selector function to apply to the environment.
-    -> m a
-asks = reader
 
 -- ----------------------------------------------------------------------------
 -- The partially applied function type is a simple reader monad
