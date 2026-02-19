@@ -21,9 +21,27 @@ source-repository head
 
 library
   exposed-modules:
+      Control.Monad.Trans.Resource
       Interpret
   other-modules:
+      Conduit
+      Control.Monad.Trans.Resource.Internal
+      Data.Acquire
+      Data.Acquire.Internal
+      Data.Conduit
       Data.Conduit.Binary
+      Data.Conduit.Combinators
+      Data.Conduit.Combinators.Stream
+      Data.Conduit.Combinators.Unqualified
+      Data.Conduit.Internal
+      Data.Conduit.Internal.Conduit
+      Data.Conduit.Internal.Fusion
+      Data.Conduit.Internal.List.Stream
+      Data.Conduit.Internal.Pipe
+      Data.Conduit.Lift
+      Data.Conduit.List
+      Data.Streaming.FileRead
+      Data.Streaming.Filesystem
       Paths_TestingNGLESS
   hs-source-dirs:
       NGLess/
@@ -38,11 +56,19 @@ library
   build-depends:
       base
     , bytestring
-    , conduit
+    , containers
     , directory
+    , exceptions
+    , filepath
     , mtl >=2.2
+    , mono-traversable
+    , primitive
     , resourcet >=1.1
+    , text
     , transformers
+    , unliftio-core
+    , unix
+    , vector
   default-language: Haskell2010
   if impl(ghc >=8.0)
     ghc-options: -Wall -fwarn-tabs -fno-warn-missing-signatures -threaded -rtsopts "-with-rtsopts=-A64m -n4m -H"
@@ -65,10 +91,8 @@ executable testingNGLESS
       TestingNGLESS
     , base
     , bytestring
-    , conduit
     , directory
     , mtl >=2.2
-    , resourcet >=1.1
     , transformers
   default-language: Haskell2010
   if impl(ghc >=8.0)
