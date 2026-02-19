@@ -7,6 +7,7 @@
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE DeriveDataTypeable #-}
@@ -33,199 +34,165 @@ module Deps
   , (.|)
   ) where
 
-import Data.Kind (Type)
-import Control.Monad.Trans.Cont (ContT)
-import qualified Control.Monad.Trans.Cont as ContT
-import Control.Monad.Trans.Except (ExceptT)
-import qualified Control.Monad.Trans.Except as Except
-import Control.Monad.Trans.Identity (IdentityT)
-import qualified Control.Monad.Trans.Identity as Identity
-import Control.Monad.Trans.Maybe (MaybeT)
-import qualified Control.Monad.Trans.Maybe as Maybe
-import Control.Monad.Trans.Reader (ReaderT)
-import qualified Control.Monad.Trans.Reader as Reader
-import qualified Control.Monad.Trans.RWS.Lazy as LazyRWS
-import qualified Control.Monad.Trans.RWS.Strict as StrictRWS
-import qualified Control.Monad.Trans.State.Lazy as LazyState
-import qualified Control.Monad.Trans.State.Strict as StrictState
-import qualified Control.Monad.Trans.Writer.Lazy as LazyWriter
-import qualified Control.Monad.Trans.Writer.Strict as StrictWriter
-import Control.Monad.Trans.Accum (AccumT)
+import Control.Applicative ( Alternative((<|>), empty) )
+import Control.Concurrent ()
+import Control.Exception
+    ( IOException, throw, Exception, SomeException )
+import Control.Monad ( ap, liftM, MonadPlus(..), unless )
+import Control.Monad.Catch
+    ( MonadThrow(..), MonadCatch(..), MonadMask(..) )
+import Control.Monad.Fail ( MonadFail(..) )
+import Control.Monad.Fix ( MonadFix(..) )
+import Control.Monad.IO.Class ( MonadIO(..) )
+import Control.Monad.Trans.Accum ( AccumT )
+import Control.Monad.Trans.Class ( MonadTrans(..) )
+import Control.Monad.Trans.Cont ( ContT )
+import Control.Monad.Trans.Except ( ExceptT, mapExceptT )
+import Control.Monad.Trans.Identity
+    ( IdentityT, IdentityT(..), mapIdentityT )
+import Control.Monad.Trans.Maybe ( MaybeT, mapMaybeT )
+import Control.Monad.Trans.RWS ( RWST )
+import Control.Monad.Trans.Reader
+    ( ReaderT, ReaderT(..), mapReaderT )
+import Control.Monad.Trans.Select
+    ( SelectT, SelectT(SelectT), runSelectT )
+import Control.Monad.Trans.State ( StateT )
+import Control.Monad.Trans.State.Lazy ()
+import Control.Monad.Trans.Writer ( WriterT )
+import Data.ByteString ( ByteString )
+import Data.ByteString.Lazy.Internal ( defaultChunkSize )
+import Data.Functor.Identity ()
+import Data.IntMap ( IntMap )
+import Data.Kind ( Type )
+import Data.Monoid ()
+import Data.Semigroup ()
+import Data.Traversable ()
+import Data.Void ( Void, absurd )
+import Data.Word ()
+import GHC.Exts ( RealWorld, State# )
+import GHC.IO ( IO(..) )
+import GHC.ST ( ST(..) )
+import Prelude
+    ( otherwise,
+      ($),
+      Bounded(minBound, maxBound),
+      Eq((==)),
+      Monad(..),
+      Functor(fmap),
+      Num((+), (-)),
+      Show(show),
+      Applicative((<*), pure, (<*>), (*>)),
+      Semigroup(..),
+      Monoid(mappend, mempty),
+      Bool,
+      String,
+      Int,
+      Maybe(..),
+      type (~),
+      Word,
+      Either(..),
+      const,
+      ioError,
+      (.),
+      id,
+      flip,
+      concat,
+      reverse,
+      FilePath,
+      either,
+      maybe )
 import qualified Control.Monad.Trans.Accum as Accum
+    ( liftCallCC, liftCatch, liftListen, liftPass, mapAccumT )
+import qualified Control.Monad.Trans.Writer.CPS as CPS
+    ( listen, mapWriterT, pass, tell, writer, WriterT )
 import qualified Control.Monad.Trans.RWS.CPS as CPSRWS
+    ( ask,
+      get,
+      liftCallCC',
+      liftCatch,
+      listen,
+      local,
+      pass,
+      put,
+      reader,
+      state,
+      tell,
+      writer,
+      RWST )
 import qualified Control.Monad.Trans.Writer.CPS as CPSWriter
-import Control.Monad.Trans.Except (ExceptT)
-import qualified Control.Monad.Trans.Except as ExceptT (catchE, runExceptT, throwE)
-import Control.Monad.Trans.Identity (IdentityT)
-import qualified Control.Monad.Trans.Identity as Identity
-import Control.Monad.Trans.Maybe (MaybeT)
-import qualified Control.Monad.Trans.Maybe as Maybe
-import Control.Monad.Trans.Reader (ReaderT)
-import qualified Control.Monad.Trans.Reader as Reader
-import qualified Control.Monad.Trans.RWS.Lazy as LazyRWS
-import qualified Control.Monad.Trans.RWS.Strict as StrictRWS
-import qualified Control.Monad.Trans.State.Lazy as LazyState
-import qualified Control.Monad.Trans.State.Strict as StrictState
-import qualified Control.Monad.Trans.Writer.Lazy as LazyWriter
-import qualified Control.Monad.Trans.Writer.Strict as StrictWriter
-import Control.Monad.Trans.Accum (AccumT)
-import qualified Control.Monad.Trans.Accum as Accum
-import qualified Control.Monad.Trans.RWS.CPS as CPSRWS
-import qualified Control.Monad.Trans.Writer.CPS as CPSWriter
-import Control.Monad.Trans.Class (lift)
-import Control.Exception (IOException, ioError)
-import Control.Monad (Monad)
-import Data.Monoid (Monoid)
-import Prelude (Either (Left, Right), Maybe (Nothing), either, flip, (.), IO, pure, (<$>), (>>=))
-import Control.Monad.IO.Class
-import Control.Monad.Trans.Reader (ReaderT (..))
-import Control.Monad.Trans.Identity (IdentityT (..))
-import Data.Kind (Type)
-import GHC.Exts   ( State#, RealWorld, noDuplicate#, touch#
-                  , unsafeCoerce#, realWorld#, seq#
-                  , TYPE
-#if __GLASGOW_HASKELL__ >= 902
-                  , UnliftedType
-#endif
-#if defined(HAVE_KEEPALIVE)
-                  , keepAliveLiftedLifted#
-                  , keepAliveUnliftedLifted#
-#endif
-                  )
-import GHC.IO     ( IO(..) )
-import GHC.ST     ( ST(..) )
-import qualified Control.Monad.ST.Lazy as L
-import Control.Monad.Trans.Class (lift)
-import Control.Monad.Trans.Cont     ( ContT    )
-import Control.Monad.Trans.Identity ( IdentityT (IdentityT) )
-import Control.Monad.Trans.Maybe    ( MaybeT   )
-import Control.Monad.Trans.Reader   ( ReaderT  )
-import Control.Monad.Trans.State    ( StateT   )
-import Control.Monad.Trans.Writer   ( WriterT  )
-import Control.Monad.Trans.RWS      ( RWST     )
-#if !MIN_VERSION_transformers(0,6,0)
-import Control.Monad.Trans.List     ( ListT    )
-import Control.Monad.Trans.Error    ( ErrorT, Error)
-#endif
-import Control.Monad.Trans.Except   ( ExceptT  )
-import Control.Monad.Trans.Accum    ( AccumT   )
-import Control.Monad.Trans.Select   ( SelectT  )
-import qualified Control.Monad.Trans.Writer.CPS as CPS
-import qualified Control.Monad.Trans.RWS.Strict    as Strict ( RWST   )
-import qualified Control.Monad.Trans.State.Strict  as Strict ( StateT )
-import qualified Control.Monad.Trans.Writer.Strict as Strict ( WriterT )
-import Control.Monad.Trans.Except (ExceptT)
-import Control.Monad.Trans.Maybe (MaybeT)
-import Control.Monad.Trans.Identity (IdentityT)
-import qualified Control.Monad.Trans.RWS.Lazy as Lazy (RWST)
-import qualified Control.Monad.Trans.RWS.Strict as Strict (RWST)
-import qualified Control.Monad.Trans.Cont as Cont
-import Control.Monad.Trans.Cont (ContT)
-import Control.Monad.Trans.Except (ExceptT, mapExceptT)
-import Control.Monad.Trans.Identity (IdentityT, mapIdentityT)
-import Control.Monad.Trans.Maybe (MaybeT, mapMaybeT)
-import Control.Monad.Trans.Reader (ReaderT)
-import qualified Control.Monad.Trans.Reader as ReaderT
-import qualified Control.Monad.Trans.RWS.Lazy as LazyRWS
-import qualified Control.Monad.Trans.RWS.Strict as StrictRWS
-import qualified Control.Monad.Trans.State.Lazy as Lazy
-import qualified Control.Monad.Trans.State.Strict as Strict
-import qualified Control.Monad.Trans.Writer.Lazy as Lazy
-import qualified Control.Monad.Trans.Writer.Strict as Strict
-import Control.Monad.Trans.Accum (AccumT)
-import qualified Control.Monad.Trans.Accum as Accum
-import Control.Monad.Trans.Select (SelectT (SelectT), runSelectT)
-import qualified Control.Monad.Trans.RWS.CPS as CPSRWS
-import qualified Control.Monad.Trans.Writer.CPS as CPS
-import Control.Monad.Trans.Class (lift)
-import Control.Monad.Trans.Cont (ContT)
-import Control.Monad.Trans.Except (ExceptT)
-import Control.Monad.Trans.Identity (IdentityT)
-import Control.Monad.Trans.Maybe (MaybeT) 
-import Control.Monad.Trans.Reader (ReaderT)
-import qualified Control.Monad.Trans.RWS.Lazy as LazyRWS
-import qualified Control.Monad.Trans.RWS.Strict as StrictRWS
-import qualified Control.Monad.Trans.State.Lazy as Lazy
-import qualified Control.Monad.Trans.State.Strict as Strict
-import qualified Control.Monad.Trans.Writer.Lazy as Lazy
-import qualified Control.Monad.Trans.Writer.Strict as Strict
-import Control.Monad.Trans.Accum (AccumT)
-import Control.Monad.Trans.Select (SelectT)
-import qualified Control.Monad.Trans.RWS.CPS as CPSRWS
-import qualified Control.Monad.Trans.Writer.CPS as CPS
-import Control.Monad.Trans.Class (lift)
-import Control.Monad.IO.Class
-import Control.Monad.Trans.Class
-import Control.Monad.Trans.State.Lazy
-        (State, runState, evalState, execState, mapState, withState,
-         StateT(StateT), runStateT, evalStateT, execStateT, mapStateT, withStateT)
-import Control.Exception (throw, Exception, SomeException)
-import Control.Applicative (Applicative (..), Alternative (..))
-import Control.Monad (MonadPlus (..))
-import Control.Monad.Fail (MonadFail (..))
-import Control.Monad.Fix (MonadFix (..))
-import Control.Monad.Trans.Class (MonadTrans (..))
-import Control.Monad.Trans.Cont (ContT)
-import Control.Monad.Trans.Identity (IdentityT)
-#if !MIN_VERSION_transformers(0,6,0)
-import Control.Monad.Trans.List (ListT)
-#endif
-import Control.Monad.Trans.Maybe (MaybeT)
-import Control.Monad.Trans.Except (ExceptT)
-import Control.Monad.Trans.Reader (ReaderT)
-import Control.Monad.Trans.State (StateT)
-import Control.Monad.Trans.Writer (WriterT)
-import Control.Monad.Trans.RWS (RWST)
-import qualified Control.Monad.Trans.RWS.Strict as Strict (RWST)
-import qualified Control.Monad.Trans.State.Strict as Strict (StateT)
-import qualified Control.Monad.Trans.Writer.Strict as Strict (WriterT)
-import Control.Monad.Catch (MonadThrow (..), MonadCatch (..), MonadMask (..))
-import qualified Data.IntMap as IntMap
-import Data.IntMap (IntMap)
-import qualified Data.IORef as I
-import Data.Typeable
-import Data.Word (Word)
+    ( liftCallCC, liftCatch, WriterT )
+import qualified Control.Monad.Trans.Cont as Cont ( liftLocal )
+import qualified Control.Monad.Trans.Cont as ContT ( callCC )
 import qualified Control.Exception as E
-import Control.Concurrent (ThreadId, forkIO)
-import Control.Monad.Trans.Except (ExceptT)
+    ( try, catch, mask, mask_, throwIO, SomeException )
 import qualified Control.Monad.Trans.Except as Except
-import Control.Monad.Trans.Identity (IdentityT)
-import qualified Control.Monad.Trans.Identity as Identity
-import Control.Monad.Trans.Maybe (MaybeT)
-import qualified Control.Monad.Trans.Maybe as Maybe
-import Control.Monad.Trans.Reader (ReaderT, mapReaderT)
-import qualified Control.Monad.Trans.RWS.Lazy as LazyRWS 
-import qualified Control.Monad.Trans.RWS.Strict as StrictRWS 
-import qualified Control.Monad.Trans.State.Lazy as Lazy
-import qualified Control.Monad.Trans.State.Strict as Strict
-import qualified Control.Monad.Trans.Writer.Lazy as Lazy
-import qualified Control.Monad.Trans.Writer.Strict as Strict 
-import Control.Monad.Trans.Accum (AccumT)
-import qualified Control.Monad.Trans.Accum as Accum
-import qualified Control.Monad.Trans.RWS.CPS as CPSRWS
-import qualified Control.Monad.Trans.Writer.CPS as CPS
-import Control.Monad.Trans.Class (lift)
-import Control.Applicative (Applicative (..))
-import Control.Exception (Exception)
-import qualified Control.Exception as E (catch)
-import Control.Monad (liftM, liftM2, ap)
-import Control.Monad.Fail(MonadFail(..))
-import Control.Monad.Trans.Class (MonadTrans (lift))
-import Data.Functor.Identity (Identity, runIdentity)
-import Data.Void (Void, absurd)
-import Data.Monoid (Monoid (mappend, mempty))
-import Data.Semigroup (Semigroup ((<>)))
-import Control.Monad (forever)
-import Data.Traversable (Traversable (..))
-import           Control.Monad (unless)
-import qualified Data.ByteString as S
-import           Prelude hiding (lines, takeWhile)
-import           Control.Monad.IO.Class (MonadIO (liftIO))
-import           Data.ByteString (ByteString)
-import qualified Data.ByteString as S
-import           Data.ByteString.Lazy.Internal (defaultChunkSize)
-import           Prelude hiding (lines, takeWhile)
+    ( liftCallCC, liftListen, liftPass )
+import qualified Control.Monad.Trans.Except as ExceptT
+    ( catchE, throwE )
+import qualified Data.IORef as I
+    ( atomicModifyIORef, newIORef, IORef )
 import qualified System.IO as IO
+    ( hClose, IOMode(ReadMode), Handle, openBinaryFile )
+import qualified Control.Monad.Trans.Identity as Identity
+    ( liftCallCC, liftCatch, mapIdentityT )
+import qualified Data.IntMap as IntMap
+    ( delete, elems, empty, insert, lookup )
+import qualified Control.Monad.ST.Lazy as L
+    ( lazyToStrictST, strictToLazyST, ST )
+import qualified Control.Monad.Trans.RWS.Lazy as Lazy ( RWST )
+import qualified Control.Monad.Trans.State.Lazy as Lazy
+    ( get, liftListen, liftPass, mapStateT, put, state, StateT )
+import qualified Control.Monad.Trans.Writer.Lazy as Lazy
+    ( listen, mapWriterT, pass, tell, writer, WriterT )
+import qualified Control.Monad.Trans.RWS.Lazy as LazyRWS
+    ( ask,
+      get,
+      liftCallCC',
+      liftCatch,
+      listen,
+      local,
+      pass,
+      put,
+      reader,
+      state,
+      tell,
+      writer,
+      RWST )
+import qualified Control.Monad.Trans.State.Lazy as LazyState
+    ( liftCallCC', liftCatch, StateT )
+import qualified Control.Monad.Trans.Writer.Lazy as LazyWriter
+    ( liftCallCC, liftCatch, WriterT )
+import qualified Control.Monad.Trans.Maybe as Maybe
+    ( liftCallCC, liftCatch, liftListen, liftPass )
+import qualified Control.Monad.Trans.Reader as Reader
+    ( liftCallCC, liftCatch )
+import qualified Control.Monad.Trans.Reader as ReaderT
+    ( ask, local, reader )
+import qualified Data.ByteString as S
+    ( concat, drop, elemIndex, hGetSome, null, splitAt, ByteString )
+import qualified Control.Monad.Trans.RWS.Strict as Strict ( RWST )
+import qualified Control.Monad.Trans.State.Strict as Strict
+    ( get, liftListen, liftPass, mapStateT, put, state, StateT )
+import qualified Control.Monad.Trans.Writer.Strict as Strict
+    ( listen, mapWriterT, pass, tell, writer, WriterT )
+import qualified Control.Monad.Trans.RWS.Strict as StrictRWS
+    ( ask,
+      get,
+      liftCallCC',
+      liftCatch,
+      listen,
+      local,
+      pass,
+      put,
+      reader,
+      state,
+      tell,
+      writer,
+      RWST )
+import qualified Control.Monad.Trans.State.Strict as StrictState
+    ( liftCallCC', liftCatch, StateT )
+import qualified Control.Monad.Trans.Writer.Strict as StrictWriter
+    ( liftCallCC, liftCatch, WriterT )
 
 class Monad m => MonadCont (m :: Type -> Type) where
     {- | @callCC@ (call-with-current-continuation)
@@ -398,8 +365,6 @@ instance
     throwError = lift . throwError
     catchError = Accum.liftCatch catchError
 
-newtype UnliftIO m = UnliftIO { unliftIO :: forall a. m a -> IO a }
-
 class MonadIO m => MonadUnliftIO m where
   withRunInIO :: ((forall a. m a -> IO a) -> IO b) -> m b
 
@@ -421,62 +386,6 @@ instance MonadUnliftIO m => MonadUnliftIO (IdentityT m) where
     withRunInIO $ \run ->
     inner (run . runIdentityT)
 
-askUnliftIO :: MonadUnliftIO m => m (UnliftIO m)
-askUnliftIO = withRunInIO (\run -> return (UnliftIO run))
-{-# INLINE askUnliftIO #-}
-
-{-# INLINE askRunInIO #-}
-askRunInIO :: MonadUnliftIO m => m (m a -> IO a)
-askRunInIO = withRunInIO (\run -> (return (\ma -> run ma)))
-
-{-# INLINE withUnliftIO #-}
-withUnliftIO :: MonadUnliftIO m => (UnliftIO m -> IO a) -> m a
-withUnliftIO inner = askUnliftIO >>= liftIO . inner
-
-{-# INLINE toIO #-}
-toIO :: MonadUnliftIO m => m a -> m (IO a)
-toIO m = withRunInIO $ \run -> return $ run m
-
-{- | A helper function for implementing @MonadUnliftIO@ instances.
-Useful for the common case where you want to simply delegate to the
-underlying transformer.
-
-Note: You can derive 'MonadUnliftIO' for newtypes without this helper function
-in @unliftio-core@ 0.2.0.0 and later.
-
-@since 0.1.2.0
-==== __Example__
-
-> newtype AppT m a = AppT { unAppT :: ReaderT Int (ResourceT m) a }
->   deriving (Functor, Applicative, Monad, MonadIO)
->
-> -- Same as `deriving newtype (MonadUnliftIO)`
-> instance MonadUnliftIO m => MonadUnliftIO (AppT m) where
->   withRunInIO = wrappedWithRunInIO AppT unAppT
--}
-{-# INLINE wrappedWithRunInIO #-}
-wrappedWithRunInIO :: MonadUnliftIO n
-                   => (n b -> m b)
-                   -> (forall a. m a -> n a)
-                   -> ((forall a. m a -> IO a) -> IO b)
-                   -> m b
-wrappedWithRunInIO wrap unwrap inner = wrap $ withRunInIO $ \run ->
-  inner $ run . unwrap
-
-{- | A helper function for lifting @IO a -> IO b@ functions into any @MonadUnliftIO@.
-
-=== __Example__
-
-> liftedTry :: (Exception e, MonadUnliftIO m) => m a -> m (Either e a)
-> liftedTry m = liftIOOp Control.Exception.try m
-
-@since 0.2.1.0
--}
-liftIOOp :: MonadUnliftIO m => (IO a -> IO b) -> m a -> m b
-liftIOOp f x = do
-  runInIO <- askRunInIO
-  liftIO $ f $ runInIO x
-
 #if __GLASGOW_HASKELL__ < 802
 type UnliftedType = TYPE 'PtrRepUnlifted
 #elif __GLASGOW_HASKELL__ < 902
@@ -490,13 +399,6 @@ class Monad m => PrimMonad m where
 
 class PrimMonad m => PrimBase m where
   internal :: m a -> State# (PrimState m) -> (# State# (PrimState m), a #)
-
-primitive_ :: PrimMonad m
-              => (State# (PrimState m) -> State# (PrimState m)) -> m ()
-{-# INLINE primitive_ #-}
-primitive_ f = primitive (\s# ->
-    case f s# of
-        s'# -> (# s'#, () #))
 
 instance PrimMonad IO where
   type PrimState IO = RealWorld
@@ -632,115 +534,6 @@ instance (PrimMonad m, s ~ PrimState m) => MonadPrim s m
 class (PrimBase m, MonadPrim s m) => MonadPrimBase s m
 instance (PrimBase m, MonadPrim s m) => MonadPrimBase s m
 
-liftPrim
-  :: (PrimBase m1, PrimMonad m2, PrimState m1 ~ PrimState m2) => m1 a -> m2 a
-{-# INLINE liftPrim #-}
-liftPrim = primToPrim
-
-primToPrim :: (PrimBase m1, PrimMonad m2, PrimState m1 ~ PrimState m2)
-        => m1 a -> m2 a
-{-# INLINE primToPrim #-}
-primToPrim m = primitive (internal m)
-
-primToIO :: (PrimBase m, PrimState m ~ RealWorld) => m a -> IO a
-{-# INLINE primToIO #-}
-primToIO = primToPrim
-
-primToST :: PrimBase m => m a -> ST (PrimState m) a
-{-# INLINE primToST #-}
-primToST = primToPrim
-
-ioToPrim :: (PrimMonad m, PrimState m ~ RealWorld) => IO a -> m a
-{-# INLINE ioToPrim #-}
-ioToPrim = primToPrim
-
-stToPrim :: PrimMonad m => ST (PrimState m) a -> m a
-{-# INLINE stToPrim #-}
-stToPrim = primToPrim
-
-unsafePrimToPrim :: (PrimBase m1, PrimMonad m2) => m1 a -> m2 a
-{-# INLINE unsafePrimToPrim #-}
-unsafePrimToPrim m = primitive (unsafeCoerce# (internal m))
-
-unsafePrimToST :: PrimBase m => m a -> ST s a
-{-# INLINE unsafePrimToST #-}
-unsafePrimToST = unsafePrimToPrim
-
-unsafePrimToIO :: PrimBase m => m a -> IO a
-{-# INLINE unsafePrimToIO #-}
-unsafePrimToIO = unsafePrimToPrim
-
-unsafeSTToPrim :: PrimMonad m => ST s a -> m a
-{-# INLINE unsafeSTToPrim #-}
-unsafeSTToPrim = unsafePrimToPrim
-
-unsafeIOToPrim :: PrimMonad m => IO a -> m a
-{-# INLINE unsafeIOToPrim #-}
-unsafeIOToPrim = unsafePrimToPrim
-
-unsafeInlinePrim :: PrimBase m => m a -> a
-{-# INLINE unsafeInlinePrim #-}
-unsafeInlinePrim m = unsafeInlineIO (unsafePrimToIO m)
-
-unsafeInlineIO :: IO a -> a
-{-# INLINE unsafeInlineIO #-}
-unsafeInlineIO m = case internal m realWorld# of (# _, r #) -> r
-
-unsafeInlineST :: ST s a -> a
-{-# INLINE unsafeInlineST #-}
-unsafeInlineST = unsafeInlinePrim
-
-touch :: PrimMonad m => a -> m ()
-{-# INLINE touch #-}
-touch x = unsafePrimToPrim
-        $ (primitive (\s -> case touch# x s of { s' -> (# s', () #) }) :: IO ())
-
-touchUnlifted :: forall (m :: Type -> Type) (a :: UnliftedType). PrimMonad m => a -> m ()
-{-# INLINE touchUnlifted #-}
-touchUnlifted x = unsafePrimToPrim
-        $ (primitive (\s -> case touch# x s of { s' -> (# s', () #) }) :: IO ())
-
-keepAlive :: PrimBase m
-  => a -- ^ Value @x@ to keep alive while computation @k@ runs.
-  -> m r -- ^ Computation @k@
-  -> m r
-#if defined(HAVE_KEEPALIVE)
-{-# INLINE keepAlive #-}
-keepAlive x k =
-  primitive $ \s0 -> keepAliveLiftedLifted# x s0 (internal k)
-
-#else
-{-# NOINLINE keepAlive #-}
-keepAlive x k = k <* touch x
-#endif
-
-keepAliveUnlifted :: forall (m :: Type -> Type) (a :: UnliftedType) (r :: Type). PrimBase m => a -> m r -> m r
-#if defined(HAVE_KEEPALIVE)
-{-# INLINE keepAliveUnlifted #-}
-keepAliveUnlifted x k =
-  primitive $ \s0 -> keepAliveUnliftedLifted# x s0 (internal k)
-
-#else
-{-# NOINLINE keepAliveUnlifted #-}
-keepAliveUnlifted x k = k <* touchUnlifted x
-#endif
-
-evalPrim :: forall a m . PrimMonad m => a -> m a
-evalPrim a = primitive (\s -> seq# a s)
-
-noDuplicate :: PrimMonad m => m ()
-#if __GLASGOW_HASKELL__ >= 802
-noDuplicate = primitive $ \ s -> (# noDuplicate# s, () #)
-#else
-noDuplicate = unsafeIOToPrim $ primitive $ \s -> (# noDuplicate# s, () #)
-#endif
-
-unsafeInterleave, unsafeDupableInterleave :: PrimBase m => m a -> m a
-unsafeInterleave x = unsafeDupableInterleave (noDuplicate >> x)
-unsafeDupableInterleave x = primitive $ \ s -> let r' = case internal x s of (# _, r #) -> r in (# s, r' #)
-{-# INLINE unsafeInterleave #-}
-{-# NOINLINE unsafeDupableInterleave #-}
-
 class (Monoid w, MonadReader r m, MonadWriter w m, MonadState s m)
    => MonadRWS r w s m | m -> r, m -> w, m -> s
 
@@ -872,9 +665,6 @@ class Monad m => MonadState s m | m -> s where
       return a
     {-# MINIMAL state | get, put #-}
 
-modify :: MonadState s m => (s -> s) -> m ()
-modify f = state (\s -> ((), f s))
-
 instance Monad m => MonadState s (Lazy.StateT s m) where
     get = Lazy.get
     put = Lazy.put
@@ -960,13 +750,12 @@ data ReleaseType
     = ReleaseEarly
     | ReleaseNormal
     | ReleaseExceptionWith E.SomeException
-    deriving (Show, Typeable)
+    deriving (Show)
 
 class MonadIO m => MonadResource m where
     liftResourceT :: ResourceT IO a -> m a
 
 data ReleaseKey = ReleaseKey !(I.IORef ReleaseMap) !Int
-    deriving Typeable
 
 type RefCount = Word
 type NextKey = Int
@@ -974,8 +763,6 @@ type NextKey = Int
 data ReleaseMap =
     ReleaseMap !NextKey !RefCount !(IntMap (ReleaseType -> IO ()))
   | ReleaseMapClosed
-
-type ResIO = ResourceT IO
 
 instance MonadCont m => MonadCont (ResourceT m) where
   callCC f = ResourceT $ \i -> callCC $ \c -> unResourceT (f (ResourceT . const . c)) i
@@ -1014,12 +801,12 @@ instance MonadMask m => MonadMask (ResourceT m) where
     ResourceT $ \e -> uninterruptibleMask $ \u -> unResourceT (a $ q u) e
       where q u (ResourceT b) = ResourceT (u . b)
 #if MIN_VERSION_exceptions(0, 10, 0)
-  generalBracket acquire release use =
+  generalBracket acquire cleanup use =
     ResourceT $ \r ->
         generalBracket
             ( unResourceT acquire r )
             ( \resource exitCase ->
-                  unResourceT ( release resource exitCase ) r
+                  unResourceT ( cleanup resource exitCase ) r
             )
             ( \resource -> unResourceT ( use resource ) r )
 #elif MIN_VERSION_exceptions(0, 9, 0)
@@ -1037,26 +824,8 @@ transResourceT :: (m a -> n b)
 transResourceT f (ResourceT mx) = ResourceT (\r -> f (mx r))
 
 newtype ResourceT m a = ResourceT { unResourceT :: I.IORef ReleaseMap -> m a }
-#if __GLASGOW_HASKELL__ >= 707
-        deriving Typeable
-#else
-instance Typeable1 m => Typeable1 (ResourceT m) where
-    typeOf1 = goType undefined
-      where
-        goType :: Typeable1 m => m a -> ResourceT m a -> TypeRep
-        goType m _ =
-            mkTyConApp
-#if __GLASGOW_HASKELL__ >= 704
-                (mkTyCon3 "resourcet" "Control.Monad.Trans.Resource" "ResourceT")
-#else
-                (mkTyCon "Control.Monad.Trans.Resource.ResourceT")
-#endif
-                [ typeOf1 m
-                ]
-#endif
 
-data InvalidAccess = InvalidAccess { functionName :: String }
-    deriving Typeable
+data InvalidAccess = InvalidAccess String
 
 instance Show InvalidAccess where
     show (InvalidAccess f) = concat
@@ -1132,32 +901,6 @@ GOX(Monoid w, Strict.WriterT w)
 #undef GO
 #undef GOX
 
-stateAlloc :: I.IORef ReleaseMap -> IO ()
-stateAlloc istate = do
-    I.atomicModifyIORef istate $ \rm ->
-        case rm of
-            ReleaseMap nk rf m ->
-                (ReleaseMap nk (rf + 1) m, ())
-            ReleaseMapClosed -> throw $ InvalidAccess "stateAlloc"
-
-stateCleanup :: ReleaseType -> I.IORef ReleaseMap -> IO ()
-stateCleanup rtype istate = E.mask_ $ do
-    mm <- I.atomicModifyIORef istate $ \rm ->
-        case rm of
-            ReleaseMap nk rf m ->
-                let rf' = rf - 1
-                 in if rf' == minBound
-                        then (ReleaseMapClosed, Just m)
-                        else (ReleaseMap nk rf' m, Nothing)
-            ReleaseMapClosed -> throw $ InvalidAccess "stateCleanup"
-    case mm of
-        Just m ->
-            mapM_ (\x -> try (x rtype) >> return ()) $ IntMap.elems m
-        Nothing -> return ()
-  where
-    try :: IO a -> IO (Either SomeException a)
-    try = E.try
-
 register' :: I.IORef ReleaseMap
           -> IO ()
           -> IO ReleaseKey
@@ -1169,23 +912,12 @@ register' istate rel = I.atomicModifyIORef istate $ \rm ->
             )
         ReleaseMapClosed -> throw $ InvalidAccess "register'"
 
-registerType :: I.IORef ReleaseMap
-             -> (ReleaseType -> IO ())
-             -> IO ReleaseKey
-registerType istate rel = I.atomicModifyIORef istate $ \rm ->
-    case rm of
-        ReleaseMap key rf m ->
-            ( ReleaseMap (key - 1) rf (IntMap.insert key rel m)
-            , ReleaseKey istate key
-            )
-        ReleaseMapClosed -> throw $ InvalidAccess "register'"
-
 data ResourceCleanupException = ResourceCleanupException
   { rceOriginalException :: !(Maybe SomeException)
   , rceFirstCleanupException :: !SomeException
   , rceOtherCleanupExceptions :: ![SomeException]
   }
-  deriving (Show, Typeable)
+  deriving (Show)
 instance Exception ResourceCleanupException
 
 stateCleanupChecked
@@ -1224,15 +956,9 @@ mapMaybeReverseM f =
         Nothing -> go bs as
         Just b -> go (b:bs) as
 
-register :: MonadResource m => IO () -> m ReleaseKey
-register = liftResourceT . registerRIO
-
 release :: MonadIO m => ReleaseKey -> m ()
 release (ReleaseKey istate rk) = liftIO $ release' istate rk
     (maybe (return ()) id)
-
-unprotect :: MonadIO m => ReleaseKey -> m (Maybe (IO ()))
-unprotect (ReleaseKey istate rk) = liftIO $ release' istate rk return
 
 allocate :: MonadResource m
          => IO a -- ^ allocate
@@ -1240,31 +966,11 @@ allocate :: MonadResource m
          -> m (ReleaseKey, a)
 allocate a = liftResourceT . allocateRIO a
 
-allocate_ :: MonadResource m
-          => IO a -- ^ allocate
-          -> IO () -- ^ free resource
-          -> m ReleaseKey
-allocate_ a = fmap fst . allocate a . const
-
-resourceMask :: MonadResource m => ((forall a. ResourceT IO a -> ResourceT IO a) -> ResourceT IO b) -> m b
-resourceMask r = liftResourceT (resourceMaskRIO r)
-
 allocateRIO :: IO a -> (a -> IO ()) -> ResourceT IO (ReleaseKey, a)
 allocateRIO acquire rel = ResourceT $ \istate -> liftIO $ E.mask_ $ do
     a <- acquire
     key <- register' istate $ rel a
     return (key, a)
-
-registerRIO :: IO () -> ResourceT IO ReleaseKey
-registerRIO rel = ResourceT $ \istate -> liftIO $ register' istate rel
-
-resourceMaskRIO :: ((forall a. ResourceT IO a -> ResourceT IO a) -> ResourceT IO b) -> ResourceT IO b
-resourceMaskRIO f = ResourceT $ \istate -> liftIO $ E.mask $ \restore ->
-    let ResourceT f' = f (go restore)
-     in f' istate
-  where
-    go :: (forall a. IO a -> IO a) -> (forall a. ResourceT IO a -> ResourceT IO a)
-    go r (ResourceT g) = ResourceT (\i -> r (g i))
 
 release' :: I.IORef ReleaseMap
          -> Int
@@ -1293,68 +999,12 @@ runResourceT (ResourceT r) = withRunInIO $ \run -> do
         stateCleanupChecked Nothing istate
         return res
 
-runResourceTChecked :: MonadUnliftIO m => ResourceT m a -> m a
-runResourceTChecked = runResourceT
-{-# INLINE runResourceTChecked #-}
-
-bracket_ :: MonadUnliftIO m
-         => IO () -- ^ allocate
-         -> IO () -- ^ normal cleanup
-         -> (E.SomeException -> IO ()) -- ^ exceptional cleanup
-         -> m a
-         -> m a
-bracket_ alloc cleanupNormal cleanupExc inside =
-    withRunInIO $ \run -> E.mask $ \restore -> do
-        alloc
-        res <- restore (run inside) `E.catch` (\e -> cleanupExc e >> E.throwIO e)
-        cleanupNormal
-        return res
-
-joinResourceT :: ResourceT (ResourceT m) a
-              -> ResourceT m a
-joinResourceT (ResourceT f) = ResourceT $ \r -> unResourceT (f r) r
-
-resourceForkWith
-  :: MonadUnliftIO m
-  => (IO () -> IO a)
-  -> ResourceT m ()
-  -> ResourceT m a
-resourceForkWith g (ResourceT f) =
-  ResourceT $ \r -> withRunInIO $ \run -> E.mask $ \restore ->
-    bracket_
-        (stateAlloc r)
-        (return ())
-        (const $ return ())
-        (g $ bracket_
-            (return ())
-            (stateCleanup ReleaseNormal r)
-            (\e -> stateCleanup (ReleaseExceptionWith e) r)
-            (restore $ run $ f r))
-
-resourceForkIO :: MonadUnliftIO m => ResourceT m () -> ResourceT m ThreadId
-resourceForkIO = resourceForkWith forkIO
-
-type MonadResourceBase = MonadUnliftIO
-{-# DEPRECATED MonadResourceBase "Use MonadUnliftIO directly instead" #-}
-
 createInternalState :: MonadIO m => m InternalState
 createInternalState = liftIO
                     $ I.newIORef
                     $ ReleaseMap maxBound (minBound + 1) IntMap.empty
 
-closeInternalState :: MonadIO m => InternalState -> m ()
-closeInternalState = liftIO . stateCleanup ReleaseNormal
-
-getInternalState :: Monad m => ResourceT m InternalState
-getInternalState = ResourceT return
-
 type InternalState = I.IORef ReleaseMap
-
-runInternalState :: ResourceT m a -> InternalState -> m a
-runInternalState = unResourceT
-
-withInternalState :: (InternalState -> m a) -> ResourceT m a
-withInternalState = ResourceT
 
 class (Monoid w, Monad m) => MonadWriter w m | m -> w where
     {-# MINIMAL (writer | tell), listen, pass #-}
@@ -1572,65 +1222,6 @@ instance MonadError e m => MonadError e (Pipe l i o u m) where
     catchError (PipeM mp) f = PipeM $ catchError (liftM (flip catchError f) mp) (\e -> return (f e))
     catchError (Leftover p i) f = Leftover (catchError p f) i
 
-awaitE :: Pipe l i o u m (Either u i)
-awaitE = NeedInput (Done . Right) (Done . Left)
-{-# RULES "conduit: awaitE >>= either" forall x y. awaitE >>= either x y = NeedInput y x #-}
-{-# INLINE [1] awaitE #-}
-
-awaitP :: Pipe l i o u m (Maybe i)
-awaitP = NeedInput (Done . Just) (\_ -> Done Nothing)
-{-# INLINE [1] awaitP #-}
-
-yieldP :: o -> Pipe l i o u m ()
-yieldP = HaveOutput (Done ())
-{-# INLINE [1] yieldP #-}
-
-pipe :: Monad m => Pipe l a b r0 m r1 -> Pipe Void b c r1 m r2 -> Pipe l a c r0 m r2
-pipe = goRight
-  where
-    goRight left right =
-        case right of
-            HaveOutput p o   -> HaveOutput (recurse p) o
-            NeedInput rp rc  -> goLeft rp rc left
-            Done r2          -> Done r2
-            PipeM mp         -> PipeM (liftM recurse mp)
-            Leftover _ i     -> absurd i
-      where
-        recurse = goRight left
-
-    goLeft rp rc left =
-        case left of
-            HaveOutput left' o        -> goRight left' (rp o)
-            NeedInput left' lc        -> NeedInput (recurse . left') (recurse . lc)
-            Done r1                   -> goRight (Done r1) (rc r1)
-            PipeM mp                  -> PipeM (liftM recurse mp)
-            Leftover left' i          -> Leftover (recurse left') i
-      where
-        recurse = goLeft rp rc
-
-pipeL :: Monad m => Pipe l a b r0 m r1 -> Pipe b b c r1 m r2 -> Pipe l a c r0 m r2
-pipeL = goRight
-  where
-    goRight left right =
-        case right of
-            HaveOutput p o    -> HaveOutput (recurse p) o
-            NeedInput rp rc   -> goLeft rp rc left
-            Done r2           -> Done r2
-            PipeM mp          -> PipeM (liftM recurse mp)
-            Leftover right' i -> goRight (HaveOutput left i) right'
-      where
-        recurse = goRight left
-
-    goLeft rp rc left =
-        case left of
-            HaveOutput left' o        -> goRight left' (rp o)
-            NeedInput left' lc        -> NeedInput (recurse . left') (recurse . lc)
-            Done r1                   -> goRight (Done r1) (rc r1)
-            PipeM mp                  -> PipeM (liftM recurse mp)
-            Leftover left' i          -> Leftover (recurse left') i
-      where
-        recurse = goLeft rp rc
-
 runPipe :: Monad m => Pipe Void () Void () m r -> m r
 runPipe (HaveOutput _ o) = absurd o
 runPipe (NeedInput _ c) = runPipe (c ())
@@ -1648,69 +1239,10 @@ injectLeftovers = go []
     go ls (PipeM mp) = PipeM (liftM (go ls) mp)
     go ls (Leftover p l) = go (l:ls) p
 
-withUpstream :: Monad m => Pipe l i o u m r -> Pipe l i o u m (u, r)
-withUpstream down = down >>= go
-  where
-    go r = loop
-      where
-        loop = awaitE >>= either (\u -> return (u, r)) (\_ -> loop)
-
-infixr 9 <+<
-infixl 9 >+>
-
-(>+>) :: Monad m => Pipe l a b r0 m r1 -> Pipe Void b c r1 m r2 -> Pipe l a c r0 m r2
-(>+>) = pipe
-{-# INLINE (>+>) #-}
-
-(<+<) :: Monad m => Pipe Void b c r1 m r2 -> Pipe l a b r0 m r1 -> Pipe l a c r0 m r2
-(<+<) = flip pipe
-{-# INLINE (<+<) #-}
-
-catchP :: (MonadUnliftIO m, Exception e)
-       => Pipe l i o u m r
-       -> (e -> Pipe l i o u m r)
-       -> Pipe l i o u m r
-catchP p0 onErr = go p0
-  where
-    go (Done r) = Done r
-    go (PipeM mp) = PipeM $ withRunInIO $ \run ->
-      E.catch (run (liftM go mp)) (return . onErr)
-    go (Leftover p i) = Leftover (go p) i
-    go (NeedInput x y) = NeedInput (go . x) (go . y)
-    go (HaveOutput p o) = HaveOutput (go p) o
-{-# INLINABLE catchP #-}
-
-handleP :: (MonadUnliftIO m, Exception e)
-        => (e -> Pipe l i o u m r)
-        -> Pipe l i o u m r
-        -> Pipe l i o u m r
-handleP = flip catchP
-{-# INLINE handleP #-}
-
-tryP :: (MonadUnliftIO m, Exception e)
-     => Pipe l i o u m r
-     -> Pipe l i o u m (Either e r)
-tryP p = fmap Right p `catchP` (return . Left)
-{-# INLINABLE tryP #-}
-
-generalizeUpstream :: Monad m => Pipe l i o () m r -> Pipe l i o u m r
-generalizeUpstream = go
-  where
-    go (HaveOutput p o) = HaveOutput (go p) o
-    go (NeedInput x y) = NeedInput (go . x) (\_ -> go (y ()))
-    go (Done r) = Done r
-    go (PipeM mp) = PipeM (liftM go mp)
-    go (Leftover p l) = Leftover (go p) l
-{-# INLINE generalizeUpstream #-}
-
 newtype ConduitT i o m r = ConduitT
     { unConduitT :: forall b.
                     (r -> Pipe i i o () m b) -> Pipe i i o () m b
     }
-
-newtype SealedConduitT i o m r = SealedConduitT (Pipe i i o () m r)
-
-type ConduitM = ConduitT
 
 instance Functor (ConduitT i o m) where
     fmap f (ConduitT c) = ConduitT $ \rest -> c (rest . f)
@@ -1822,385 +1354,12 @@ instance PrimMonad m => PrimMonad (ConduitT i o m) where
   type PrimState (ConduitT i o m) = PrimState m
   primitive = lift . primitive
 
-type Source m o = ConduitT () o m ()
-{-# DEPRECATED Source "Use ConduitT directly" #-}
-
-type Producer m o = forall i. ConduitT i o m ()
-{-# DEPRECATED Producer "Use ConduitT directly" #-}
-
-type Sink i = ConduitT i Void
-{-# DEPRECATED Sink "Use ConduitT directly" #-}
-
-type Consumer i m r = forall o. ConduitT i o m r
-{-# DEPRECATED Consumer "Use ConduitT directly" #-}
-
-type Conduit i m o = ConduitT i o m ()
-{-# DEPRECATED Conduit "Use ConduitT directly" #-}
-
-sealConduitT :: ConduitT i o m r -> SealedConduitT i o m r
-sealConduitT (ConduitT f) = SealedConduitT (f Done)
-
-unsealConduitT :: Monad m => SealedConduitT i o m r -> ConduitT i o m r
-unsealConduitT (SealedConduitT f) = ConduitT (f >>=)
-
-connectResume :: Monad m
-              => SealedConduitT () a m ()
-              -> ConduitT a Void m r
-              -> m (SealedConduitT () a m (), r)
-connectResume (SealedConduitT left0) (ConduitT right0) =
-    goRight left0 (right0 Done)
-  where
-    goRight left right =
-        case right of
-            HaveOutput _ o   -> absurd o
-            NeedInput rp rc  -> goLeft rp rc left
-            Done r2          -> return (SealedConduitT left, r2)
-            PipeM mp         -> mp >>= goRight left
-            Leftover p i     -> goRight (HaveOutput left i) p
-
-    goLeft rp rc left =
-        case left of
-            HaveOutput left' o            -> goRight left' (rp o)
-            NeedInput _ lc                -> recurse (lc ())
-            Done ()                       -> goRight (Done ()) (rc ())
-            PipeM mp                      -> mp >>= recurse
-            Leftover p ()                 -> recurse p
-      where
-        recurse = goLeft rp rc
-
-sourceToPipe :: Monad m => ConduitT () o m () -> Pipe l i o u m ()
-sourceToPipe (ConduitT k) =
-    go $ k Done
-  where
-    go (HaveOutput p o) = HaveOutput (go p) o
-    go (NeedInput _ c) = go $ c ()
-    go (Done ()) = Done ()
-    go (PipeM mp) = PipeM (liftM go mp)
-    go (Leftover p ()) = go p
-
-sinkToPipe :: Monad m => ConduitT i Void m r -> Pipe l i o u m r
-sinkToPipe (ConduitT k) =
-    go $ injectLeftovers $ k Done
-  where
-    go (HaveOutput _ o) = absurd o
-    go (NeedInput p c) = NeedInput (go . p) (const $ go $ c ())
-    go (Done r) = Done r
-    go (PipeM mp) = PipeM (liftM go mp)
-    go (Leftover _ l) = absurd l
-
-conduitToPipe :: Monad m => ConduitT i o m () -> Pipe l i o u m ()
-conduitToPipe (ConduitT k) =
-    go $ injectLeftovers $ k Done
-  where
-    go (HaveOutput p o) = HaveOutput (go p) o
-    go (NeedInput p c) = NeedInput (go . p) (const $ go $ c ())
-    go (Done ()) = Done ()
-    go (PipeM mp) = PipeM (liftM go mp)
-    go (Leftover _ l) = absurd l
-
-toProducer :: Monad m => ConduitT () a m () -> ConduitT i a m ()
-toProducer (ConduitT c0) = ConduitT $ \rest -> let
-    go (HaveOutput p o) = HaveOutput (go p) o
-    go (NeedInput _ c) = go (c ())
-    go (Done r) = rest r
-    go (PipeM mp) = PipeM (liftM go mp)
-    go (Leftover p ()) = go p
-    in go (c0 Done)
-
-toConsumer :: Monad m => ConduitT a Void m b -> ConduitT a o m b
-toConsumer (ConduitT c0) = ConduitT $ \rest -> let
-    go (HaveOutput _ o) = absurd o
-    go (NeedInput p c) = NeedInput (go . p) (go . c)
-    go (Done r) = rest r
-    go (PipeM mp) = PipeM (liftM go mp)
-    go (Leftover p l) = Leftover (go p) l
-    in go (c0 Done)
-
-catchC :: (MonadUnliftIO m, Exception e)
-       => ConduitT i o m r
-       -> (e -> ConduitT i o m r)
-       -> ConduitT i o m r
-catchC (ConduitT p0) onErr = ConduitT $ \rest -> let
-    go (Done r) = rest r
-    go (PipeM mp) = PipeM $ withRunInIO $ \ run ->
-      run (liftM go mp) `E.catch` \ e ->
-        return $ onErr e `unConduitT` rest
-    go (Leftover p i) = Leftover (go p) i
-    go (NeedInput x y) = NeedInput (go . x) (go . y)
-    go (HaveOutput p o) = HaveOutput (go p) o
-    in go (p0 Done)
-{-# INLINE catchC #-}
-
-handleC :: (MonadUnliftIO m, Exception e)
-        => (e -> ConduitT i o m r)
-        -> ConduitT i o m r
-        -> ConduitT i o m r
-handleC = flip catchC
-{-# INLINE handleC #-}
-
-tryC :: (MonadUnliftIO m, Exception e)
-     => ConduitT i o m r
-     -> ConduitT i o m (Either e r)
-tryC c = fmap Right c `catchC` (return . Left)
-{-# INLINE tryC #-}
-
-zipSinks :: Monad m => ConduitT i Void m r -> ConduitT i Void m r' -> ConduitT i Void m (r, r')
-zipSinks (ConduitT x0) (ConduitT y0) = ConduitT $ \rest -> let
-    Leftover _  i    >< _                = absurd i
-    _                >< Leftover _  i    = absurd i
-    HaveOutput _ o   >< _                = absurd o
-    _                >< HaveOutput _ o   = absurd o
-
-    PipeM mx         >< y                = PipeM (liftM (>< y) mx)
-    x                >< PipeM my         = PipeM (liftM (x ><) my)
-    Done x           >< Done y           = rest (x, y)
-    NeedInput px cx  >< NeedInput py cy  = NeedInput (\i -> px i >< py i) (\() -> cx () >< cy ())
-    NeedInput px cx  >< y@Done{}         = NeedInput (\i -> px i >< y)    (\u -> cx u >< y)
-    x@Done{}         >< NeedInput py cy  = NeedInput (\i -> x >< py i)    (\u -> x >< cy u)
-    in injectLeftovers (x0 Done) >< injectLeftovers (y0 Done)
-
-zipSources :: Monad m => ConduitT () a m () -> ConduitT () b m () -> ConduitT () (a, b) m ()
-zipSources (ConduitT left0) (ConduitT right0) = ConduitT $ \rest -> let
-    go (Leftover left ()) right = go left right
-    go left (Leftover right ())  = go left right
-    go (Done ()) (Done ()) = rest ()
-    go (Done ()) (HaveOutput _ _) = rest ()
-    go (HaveOutput _ _) (Done ()) = rest ()
-    go (Done ()) (PipeM _) = rest ()
-    go (PipeM _) (Done ()) = rest ()
-    go (PipeM mx) (PipeM my) = PipeM (liftM2 go mx my)
-    go (PipeM mx) y@HaveOutput{} = PipeM (liftM (\x -> go x y) mx)
-    go x@HaveOutput{} (PipeM my) = PipeM (liftM (go x) my)
-    go (HaveOutput srcx x) (HaveOutput srcy y) = HaveOutput (go srcx srcy) (x, y)
-    go (NeedInput _ c) right = go (c ()) right
-    go left (NeedInput _ c) = go left (c ())
-    in go (left0 Done) (right0 Done)
-
-zipSourcesApp :: Monad m => ConduitT () (a -> b) m () -> ConduitT () a m () -> ConduitT () b m ()
-zipSourcesApp (ConduitT left0) (ConduitT right0) = ConduitT $ \rest -> let
-    go (Leftover left ()) right = go left right
-    go left (Leftover right ())  = go left right
-    go (Done ()) (Done ()) = rest ()
-    go (Done ()) (HaveOutput _ _) = rest ()
-    go (HaveOutput _ _) (Done ()) = rest ()
-    go (Done ()) (PipeM _) = rest ()
-    go (PipeM _) (Done ()) = rest ()
-    go (PipeM mx) (PipeM my) = PipeM (liftM2 go mx my)
-    go (PipeM mx) y@HaveOutput{} = PipeM (liftM (\x -> go x y) mx)
-    go x@HaveOutput{} (PipeM my) = PipeM (liftM (go x) my)
-    go (HaveOutput srcx x) (HaveOutput srcy y) = HaveOutput (go srcx srcy) (x y)
-    go (NeedInput _ c) right = go (c ()) right
-    go left (NeedInput _ c) = go left (c ())
-    in go (left0 Done) (right0 Done)
-
-zipConduitApp
-    :: Monad m
-    => ConduitT i o m (x -> y)
-    -> ConduitT i o m x
-    -> ConduitT i o m y
-zipConduitApp (ConduitT left0) (ConduitT right0) = ConduitT $ \rest -> let
-    go (Done f) (Done x) = rest (f x)
-    go (PipeM mx) y = PipeM (flip go y `liftM` mx)
-    go x (PipeM my) = PipeM (go x `liftM` my)
-    go (HaveOutput x o) y = HaveOutput (go x y) o
-    go x (HaveOutput y o) = HaveOutput (go x y) o
-    go (Leftover _ i) _ = absurd i
-    go _ (Leftover _ i) = absurd i
-    go (NeedInput px cx) (NeedInput py cy) = NeedInput
-        (\i -> go (px i) (py i))
-        (\u -> go (cx u) (cy u))
-    go (NeedInput px cx) (Done y) = NeedInput
-        (\i -> go (px i) (Done y))
-        (\u -> go (cx u) (Done y))
-    go (Done x) (NeedInput py cy) = NeedInput
-        (\i -> go (Done x) (py i))
-        (\u -> go (Done x) (cy u))
-  in go (injectLeftovers $ left0 Done) (injectLeftovers $ right0 Done)
-
-fuseReturnLeftovers :: Monad m
-                    => ConduitT a b m ()
-                    -> ConduitT b c m r
-                    -> ConduitT a c m (r, [b])
-fuseReturnLeftovers (ConduitT left0) (ConduitT right0) = ConduitT $ \rest -> let
-    goRight bs left right =
-        case right of
-            HaveOutput p o -> HaveOutput (recurse p) o
-            NeedInput rp rc  ->
-                case bs of
-                    [] -> goLeft rp rc left
-                    b:bs' -> goRight bs' left (rp b)
-            Done r2          -> rest (r2, bs)
-            PipeM mp         -> PipeM (liftM recurse mp)
-            Leftover p b     -> goRight (b:bs) left p
-      where
-        recurse = goRight bs left
-
-    goLeft rp rc left =
-        case left of
-            HaveOutput left' o        -> goRight [] left' (rp o)
-            NeedInput left' lc        -> NeedInput (recurse . left') (recurse . lc)
-            Done r1                   -> goRight [] (Done r1) (rc r1)
-            PipeM mp                  -> PipeM (liftM recurse mp)
-            Leftover left' i          -> Leftover (recurse left') i
-      where
-        recurse = goLeft rp rc
-    in goRight [] (left0 Done) (right0 Done)
-
-fuseLeftovers
-    :: Monad m
-    => ([b] -> [a])
-    -> ConduitT a b m ()
-    -> ConduitT b c m r
-    -> ConduitT a c m r
-fuseLeftovers f left right = do
-    (r, bs) <- fuseReturnLeftovers left right
-    mapM_ leftover $ reverse $ f bs
-    return r
-
-connectResumeConduit
-    :: Monad m
-    => SealedConduitT i o m ()
-    -> ConduitT o Void m r
-    -> ConduitT i Void m (SealedConduitT i o m (), r)
-connectResumeConduit (SealedConduitT left0) (ConduitT right0) = ConduitT $ \rest -> let
-    goRight left right =
-        case right of
-            HaveOutput _ o -> absurd o
-            NeedInput rp rc -> goLeft rp rc left
-            Done r2 -> rest (SealedConduitT left, r2)
-            PipeM mp -> PipeM (liftM (goRight left) mp)
-            Leftover p i -> goRight (HaveOutput left i) p
-
-    goLeft rp rc left =
-        case left of
-            HaveOutput left' o -> goRight left' (rp o)
-            NeedInput left' lc -> NeedInput (recurse . left') (recurse . lc)
-            Done () -> goRight (Done ()) (rc ())
-            PipeM mp -> PipeM (liftM recurse mp)
-            Leftover left' i -> Leftover (recurse left') i -- recurse p
-      where
-        recurse = goLeft rp rc
-    in goRight left0 (right0 Done)
-
-mergeSource
-  :: Monad m
-  => ConduitT () i m ()
-  -> ConduitT a (i, a) m ()
-mergeSource = loop . sealConduitT
-  where
-    loop :: Monad m => SealedConduitT () i m () -> ConduitT a (i, a) m ()
-    loop src0 = await >>= maybe (return ()) go
-      where
-        go a = do
-          (src1, mi) <- lift $ src0 $$++ await
-          case mi of
-            Nothing -> leftover a
-            Just i  -> yield (i, a) >> loop src1
-
-passthroughSink :: Monad m
-                => ConduitT i Void m r
-                -> (r -> m ()) -- ^ finalizer
-                -> ConduitT i i m ()
-passthroughSink (ConduitT sink0) final = ConduitT $ \rest -> let
-
-    go mbuf _ (Done r) = do
-        maybe (return ()) yieldP mbuf
-        lift $ final r
-        unConduitT (awaitForever yield) rest
-    go mbuf is (Leftover sink i) = go mbuf (i:is) sink
-    go _ _ (HaveOutput _ o) = absurd o
-    go mbuf is (PipeM mx) = do
-        x <- lift mx
-        go mbuf is x
-    go mbuf (i:is) (NeedInput next _) = go mbuf is (next i)
-    go mbuf [] (NeedInput next done) = do
-        maybe (return ()) yieldP mbuf
-        mx <- awaitP
-        case mx of
-            Nothing -> go Nothing [] (done ())
-            Just x -> go (Just x) [] (next x)
-    in go Nothing [] (sink0 Done)
-
-sourceToList :: Monad m => ConduitT () a m () -> m [a]
-sourceToList (ConduitT k) =
-    go $ k Done
-  where
-    go (Done _) = return []
-    go (HaveOutput src x) = liftM (x:) (go src)
-    go (PipeM msrc) = msrc >>= go
-    go (NeedInput _ c) = go (c ())
-    go (Leftover p _) = go p
-
-infixr 0 $$
-infixl 1 $=
-infixr 2 =$
-infixr 2 =$=
-infixr 0 $$+
-infixr 0 $$++
-infixr 0 $$+-
-infixl 1 $=+
 infixr 2 .|
-
-connect :: Monad m
-        => ConduitT () a m ()
-        -> ConduitT a Void m r
-        -> m r
-connect = ($$)
-
-unconsM :: Monad m
-        => SealedConduitT () o m ()
-        -> m (Maybe (o, SealedConduitT () o m ()))
-unconsM (SealedConduitT p) = go p
-  where
-    go (HaveOutput p o) = pure $ Just (o, SealedConduitT p)
-    go (NeedInput _ c) = go $ c ()
-    go (Done ()) = pure Nothing
-    go (PipeM mp) = mp >>= go
-    go (Leftover p ()) = go p
-
-unconsEitherM :: Monad m
-              => SealedConduitT () o m r
-              -> m (Either r (o, SealedConduitT () o m r))
-unconsEitherM (SealedConduitT p) = go p
-  where
-    go (HaveOutput p o) = pure $ Right (o, SealedConduitT p)
-    go (NeedInput _ c) = go $ c ()
-    go (Done r) = pure $ Left r
-    go (PipeM mp) = mp >>= go
-    go (Leftover p ()) = go p
-
-fuse :: Monad m => ConduitT a b m () -> ConduitT b c m r -> ConduitT a c m r
-fuse = (=$=)
-
 (.|) :: Monad m
      => ConduitT a b m () -- ^ upstream
      -> ConduitT b c m r -- ^ downstream
      -> ConduitT a c m r
-(.|) = fuse
-{-# INLINE (.|) #-}
-
-($$) :: Monad m => Source m a -> Sink a m b -> m b
-src $$ sink = do
-    (rsrc, res) <- src $$+ sink
-    rsrc $$+- return ()
-    return res
-{-# INLINE [1] ($$) #-}
-{-# DEPRECATED ($$) "Use runConduit and .|" #-}
-
-($=) :: Monad m => Conduit a m b -> ConduitT b c m r -> ConduitT a c m r
-($=) = (=$=)
-{-# INLINE [0] ($=) #-}
-{-# RULES "conduit: $= is =$=" ($=) = (=$=) #-}
-{-# DEPRECATED ($=) "Use .|" #-}
-
-(=$) :: Monad m => Conduit a m b -> ConduitT b c m r -> ConduitT a c m r
-(=$) = (=$=)
-{-# INLINE [0] (=$) #-}
-{-# RULES "conduit: =$ is =$=" (=$) = (=$=) #-}
-{-# DEPRECATED (=$) "Use .|" #-}
-
-(=$=) :: Monad m => Conduit a m b -> ConduitT b c m r -> ConduitT a c m r
-ConduitT left0 =$= ConduitT right0 = ConduitT $ \rest ->
+ConduitT left0 .| ConduitT right0 = ConduitT $ \rest ->
     let goRight left right =
             case right of
                 HaveOutput p o    -> HaveOutput (recurse p) o
@@ -2221,32 +1380,17 @@ ConduitT left0 =$= ConduitT right0 = ConduitT $ \rest ->
           where
             recurse = goLeft rp rc
      in goRight (left0 Done) (right0 Done)
-{-# INLINE [1] (=$=) #-}
-{-# DEPRECATED (=$=) "Use .|" #-}
+{-# INLINE (.|) #-}
 
 await :: Monad m => ConduitT i o m (Maybe i)
 await = ConduitT $ \f -> NeedInput (f . Just) (const $ f Nothing)
 {-# INLINE [0] await #-}
-
-await' :: Monad m
-       => ConduitT i o m r
-       -> (i -> ConduitT i o m r)
-       -> ConduitT i o m r
-await' f g = ConduitT $ \rest -> NeedInput
-    (\i -> unConduitT (g i) rest)
-    (const $ unConduitT f rest)
-{-# INLINE await' #-}
-{-# RULES "conduit: await >>= maybe" forall x y. await >>= maybe x y = await' x y #-}
 
 yield :: Monad m
       => o -- ^ output value
       -> ConduitT i o m ()
 yield o = ConduitT $ \rest -> HaveOutput (rest ()) o
 {-# INLINE yield #-}
-
-yieldM :: Monad m => m o -> ConduitT i o m ()
-yieldM mo = lift mo >>= yield
-{-# INLINE yieldM #-}
 
 leftover :: i -> ConduitT i o m ()
 leftover i = ConduitT $ \rest -> Leftover (rest ()) i
@@ -2267,205 +1411,6 @@ bracketP alloc free inside = ConduitT $ \rest -> do
   unConduitT (inside seed) $ \res -> do
     release key
     rest res
-
-awaitForever :: Monad m => (i -> ConduitT i o m r) -> ConduitT i o m ()
-awaitForever f = ConduitT $ \rest ->
-    let go = NeedInput (\i -> unConduitT (f i) (const go)) rest
-     in go
-
-transPipe :: Monad m => (forall a. m a -> n a) -> ConduitT i o m r -> ConduitT i o n r
-transPipe f (ConduitT c0) = ConduitT $ \rest -> let
-        go (HaveOutput p o) = HaveOutput (go p) o
-        go (NeedInput p c) = NeedInput (go . p) (go . c)
-        go (Done r) = rest r
-        go (PipeM mp) =
-            PipeM (f $ liftM go $ collapse mp)
-          where
-            collapse mpipe = do
-                pipe' <- mpipe
-                case pipe' of
-                    PipeM mpipe' -> collapse mpipe'
-                    _ -> return pipe'
-        go (Leftover p i) = Leftover (go p) i
-        in go (c0 Done)
-
-mapOutput :: Monad m => (o1 -> o2) -> ConduitT i o1 m r -> ConduitT i o2 m r
-mapOutput f (ConduitT c0) = ConduitT $ \rest -> let
-    go (HaveOutput p o) = HaveOutput (go p) (f o)
-    go (NeedInput p c) = NeedInput (go . p) (go . c)
-    go (Done r) = rest r
-    go (PipeM mp) = PipeM (liftM (go) mp)
-    go (Leftover p i) = Leftover (go p) i
-    in go (c0 Done)
-
-mapOutputMaybe :: Monad m => (o1 -> Maybe o2) -> ConduitT i o1 m r -> ConduitT i o2 m r
-mapOutputMaybe f (ConduitT c0) = ConduitT $ \rest -> let
-    go (HaveOutput p o) = maybe id (\o' p' -> HaveOutput p' o') (f o) (go p)
-    go (NeedInput p c) = NeedInput (go . p) (go . c)
-    go (Done r) = rest r
-    go (PipeM mp) = PipeM (liftM (go) mp)
-    go (Leftover p i) = Leftover (go p) i
-    in go (c0 Done)
-
-mapInput :: Monad m
-         => (i1 -> i2) -- ^ map initial input to new input
-         -> (i2 -> Maybe i1) -- ^ map new leftovers to initial leftovers
-         -> ConduitT i2 o m r
-         -> ConduitT i1 o m r
-mapInput f f' (ConduitT c0) = ConduitT $ \rest -> let
-    go (HaveOutput p o) = HaveOutput (go p) o
-    go (NeedInput p c) = NeedInput (go . p . f) (go . c)
-    go (Done r) = rest r
-    go (PipeM mp) = PipeM $ liftM go mp
-    go (Leftover p i) = maybe id (flip Leftover) (f' i) (go p)
-    in go (c0 Done)
-
-mapInputM :: Monad m
-          => (i1 -> m i2) -- ^ map initial input to new input
-          -> (i2 -> m (Maybe i1)) -- ^ map new leftovers to initial leftovers
-          -> ConduitT i2 o m r
-          -> ConduitT i1 o m r
-mapInputM f f' (ConduitT c0) = ConduitT $ \rest -> let
-    go (HaveOutput p o) = HaveOutput (go p) o
-    go (NeedInput p c)  = NeedInput (\i -> PipeM $ go . p <$> f i) (go . c)
-    go (Done r)         = rest r
-    go (PipeM mp)       = PipeM $ fmap go mp
-    go (Leftover p i)   = PipeM $ (\x -> maybe id (flip Leftover) x (go p)) <$> f' i
-    in go (c0 Done)
-
-($$+) :: Monad m => ConduitT () a m () -> ConduitT a Void m b -> m (SealedConduitT () a m (), b)
-src $$+ sink = connectResume (sealConduitT src) sink
-{-# INLINE ($$+) #-}
-
-($$++) :: Monad m => SealedConduitT () a m () -> ConduitT a Void m b -> m (SealedConduitT () a m (), b)
-($$++) = connectResume
-{-# INLINE ($$++) #-}
-
-($$+-) :: Monad m => SealedConduitT () a m () -> ConduitT a Void m b -> m b
-rsrc $$+- sink = do
-    (_, res) <- connectResume rsrc sink
-    return res
-{-# INLINE ($$+-) #-}
-
-($=+) :: Monad m => SealedConduitT () a m () -> ConduitT a b m () -> SealedConduitT () b m ()
-SealedConduitT src $=+ ConduitT sink = SealedConduitT (src `pipeL` sink Done)
-
-data Flush a = Chunk a | Flush
-    deriving (Show, Eq, Ord)
-instance Functor Flush where
-    fmap _ Flush = Flush
-    fmap f (Chunk a) = Chunk (f a)
-
-newtype ZipSource m o = ZipSource { getZipSource :: ConduitT () o m () }
-
-instance Monad m => Functor (ZipSource m) where
-    fmap f = ZipSource . mapOutput f . getZipSource
-instance Monad m => Applicative (ZipSource m) where
-    pure  = ZipSource . forever . yield
-    (ZipSource f) <*> (ZipSource x) = ZipSource $ zipSourcesApp f x
-
-sequenceSources :: (Traversable f, Monad m) => f (ConduitT () o m ()) -> ConduitT () (f o) m ()
-sequenceSources = getZipSource . sequenceA . fmap ZipSource
-
-newtype ZipSink i m r = ZipSink { getZipSink :: ConduitT i Void m r }
-
-instance Monad m => Functor (ZipSink i m) where
-    fmap f (ZipSink x) = ZipSink (liftM f x)
-instance Monad m => Applicative (ZipSink i m) where
-    pure  = ZipSink . return
-    (ZipSink f) <*> (ZipSink x) =
-         ZipSink $ liftM (uncurry ($)) $ zipSinks f x
-
-sequenceSinks :: (Traversable f, Monad m) => f (ConduitT i Void m r) -> ConduitT i Void m (f r)
-sequenceSinks = getZipSink . sequenceA . fmap ZipSink
-
-(=$$+) :: Monad m
-       => ConduitT a b m ()
-       -> ConduitT b Void m r
-       -> ConduitT a Void m (SealedConduitT a b m (), r)
-(=$$+) conduit = connectResumeConduit (sealConduitT conduit)
-{-# INLINE (=$$+) #-}
-
-(=$$++) :: Monad m => SealedConduitT i o m () -> ConduitT o Void m r -> ConduitT i Void m (SealedConduitT i o m (), r)
-(=$$++) = connectResumeConduit
-{-# INLINE (=$$++) #-}
-
-(=$$+-) :: Monad m => SealedConduitT i o m () -> ConduitT o Void m r -> ConduitT i Void m r
-rsrc =$$+- sink = do
-    (_, res) <- connectResumeConduit rsrc sink
-    return res
-{-# INLINE (=$$+-) #-}
-
-infixr 0 =$$+
-infixr 0 =$$++
-infixr 0 =$$+-
-
-newtype ZipConduit i o m r = ZipConduit { getZipConduit :: ConduitT i o m r }
-    deriving Functor
-instance Monad m => Applicative (ZipConduit i o m) where
-    pure = ZipConduit . pure
-    ZipConduit left <*> ZipConduit right = ZipConduit (zipConduitApp left right)
-
-sequenceConduits :: (Traversable f, Monad m) => f (ConduitT i o m r) -> ConduitT i o m (f r)
-sequenceConduits = getZipConduit . sequenceA . fmap ZipConduit
-
-fuseBoth :: Monad m => ConduitT a b m r1 -> ConduitT b c m r2 -> ConduitT a c m (r1, r2)
-fuseBoth (ConduitT up) (ConduitT down) =
-    ConduitT (pipeL (up Done) (withUpstream $ generalizeUpstream $ down Done) >>=)
-{-# INLINE fuseBoth #-}
-
-fuseBothMaybe
-    :: Monad m
-    => ConduitT a b m r1
-    -> ConduitT b c m r2
-    -> ConduitT a c m (Maybe r1, r2)
-fuseBothMaybe (ConduitT up) (ConduitT down) =
-    ConduitT (pipeL (up Done) (go Nothing $ down Done) >>=)
-  where
-    go mup (Done r) = Done (mup, r)
-    go mup (PipeM mp) = PipeM $ liftM (go mup) mp
-    go mup (HaveOutput p o) = HaveOutput (go mup p) o
-    go _ (NeedInput p c) = NeedInput
-        (\i -> go Nothing (p i))
-        (\u -> go (Just u) (c ()))
-    go mup (Leftover p i) = Leftover (go mup p) i
-{-# INLINABLE fuseBothMaybe #-}
-
-fuseUpstream :: Monad m => ConduitT a b m r -> ConduitT b c m () -> ConduitT a c m r
-fuseUpstream up down = fmap fst (fuseBoth up down)
-{-# INLINE fuseUpstream #-}
-
-{- FIXME
-{-# RULES "conduit: ConduitT: lift x >>= f" forall m f. lift m >>= f = ConduitT (PipeM (liftM (unConduitT . f) m)) #-}
-{-# RULES "conduit: ConduitT: lift x >> f" forall m f. lift m >> f = ConduitT (PipeM (liftM (\_ -> unConduitT f) m)) #-}
-
-{-# RULES "conduit: ConduitT: liftIO x >>= f" forall m (f :: MonadIO m => a -> ConduitT i o m r). liftIO m >>= f = ConduitT (PipeM (liftM (unConduitT . f) (liftIO m))) #-}
-{-# RULES "conduit: ConduitT: liftIO x >> f" forall m (f :: MonadIO m => ConduitT i o m r). liftIO m >> f = ConduitT (PipeM (liftM (\_ -> unConduitT f) (liftIO m))) #-}
-
-{-# RULES "conduit: ConduitT: liftBase x >>= f" forall m (f :: MonadBase b m => a -> ConduitT i o m r). liftBase m >>= f = ConduitT (PipeM (liftM (unConduitT . f) (liftBase m))) #-}
-{-# RULES "conduit: ConduitT: liftBase x >> f" forall m (f :: MonadBase b m => ConduitT i o m r). liftBase m >> f = ConduitT (PipeM (liftM (\_ -> unConduitT f) (liftBase m))) #-}
-
-{-# RULES
-    "yield o >> p" forall o (p :: ConduitT i o m r). yield o >> p = ConduitT (HaveOutput (unConduitT p) o)
-  ; "when yield next" forall b o p. when b (yield o) >> p =
-        if b then ConduitT (HaveOutput (unConduitT p) o) else p
-  ; "unless yield next" forall b o p. unless b (yield o) >> p =
-        if b then p else ConduitT (HaveOutput (unConduitT p) o)
-  ; "lift m >>= yield" forall m. lift m >>= yield = yieldM m
-   #-}
-{-# RULES "conduit: leftover l >> p" forall l (p :: ConduitT i o m r). leftover l >> p =
-    ConduitT (Leftover (unConduitT p) l) #-}
-    -}
-
-runConduitPure :: ConduitT () Void Identity r -> r
-runConduitPure = runIdentity . runConduit
-{-# INLINE runConduitPure #-}
-
-runConduitRes :: MonadUnliftIO m
-              => ConduitT () Void (ResourceT m) r
-              -> m r
-runConduitRes = runResourceT . runConduit
-{-# INLINE runConduitRes #-}
 
 lines :: Monad m => ConduitT S.ByteString S.ByteString m ()
 lines =
