@@ -24,8 +24,6 @@ module Control.Monad.State.Lazy (
     -- * MonadState class
     MonadState.MonadState(..),
     MonadState.modify,
-    MonadState.modify',
-    MonadState.gets,
     -- * The State monad
     State,
     runState,

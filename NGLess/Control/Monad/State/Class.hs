@@ -32,9 +32,7 @@
 
 module Control.Monad.State.Class (
     MonadState(..),
-    modify,
-    modify',
-    gets
+    modify
   ) where
 
 import Control.Monad.Trans.Cont (ContT)
@@ -88,22 +86,6 @@ class Monad m => MonadState s m | m -> s where
 --    with an @Int@ state.
 modify :: MonadState s m => (s -> s) -> m ()
 modify f = state (\s -> ((), f s))
-
--- | A variant of 'modify' in which the computation is strict in the
--- new state.
---
--- @since 2.2
-modify' :: MonadState s m => (s -> s) -> m ()
-modify' f = do
-  s' <- get
-  put $! f s'
-
--- | Gets specific component of the state, using a projection function
--- supplied.
-gets :: MonadState s m => (s -> a) -> m a
-gets f = do
-    s <- get
-    return (f s)
 
 instance Monad m => MonadState s (Lazy.StateT s m) where
     get = Lazy.get
