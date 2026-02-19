@@ -29,7 +29,6 @@ library
       Data.Conduit
       Data.Conduit.Binary
       Data.Conduit.Combinators
-      Data.Conduit.Internal.Pipe
       Paths_TestingNGLESS
   hs-source-dirs:
       NGLess/

@@ -109,10 +109,250 @@ import Data.Void (Void, absurd)
 import Data.Monoid (Monoid (mappend, mempty))
 import Data.Semigroup (Semigroup ((<>)))
 import Control.Monad.Trans.Resource
-import Data.Conduit.Internal.Pipe hiding (yield, transPipe, mapOutput, mapOutputMaybe, mapInput, leftover, yieldM, await, awaitForever, bracketP, unconsM, unconsEitherM)
-import qualified Data.Conduit.Internal.Pipe as CI
 import Control.Monad (forever)
 import Data.Traversable (Traversable (..))
+
+#ifndef MIN_VERSION_mtl
+#define MIN_VERSION_mtl(x, y, z) 0
+#endif
+
+data Pipe l i o u m r =
+    HaveOutput (Pipe l i o u m r) o
+  | NeedInput (i -> Pipe l i o u m r) (u -> Pipe l i o u m r)
+  | Done r
+  | PipeM (m (Pipe l i o u m r))
+  | Leftover (Pipe l i o u m r) l
+
+instance Monad m => Functor (Pipe l i o u m) where
+    fmap = liftM
+    {-# INLINE fmap #-}
+
+instance Monad m => Applicative (Pipe l i o u m) where
+    pure = Done
+    {-# INLINE pure #-}
+    (<*>) = ap
+    {-# INLINE (<*>) #-}
+
+instance Monad m => Monad (Pipe l i o u m) where
+    return = pure
+    {-# INLINE return #-}
+
+    HaveOutput p o >>= fp = HaveOutput (p >>= fp) o
+    NeedInput p c >>= fp = NeedInput (\i -> p i >>= fp) (\u -> c u >>= fp)
+    Done x >>= fp = fp x
+    PipeM mp >>= fp = PipeM ((>>= fp) `liftM` mp)
+    Leftover p i >>= fp = Leftover (p >>= fp) i
+
+instance MonadTrans (Pipe l i o u) where
+    lift mr = PipeM (Done `liftM` mr)
+    {-# INLINE [1] lift #-}
+
+instance MonadIO m => MonadIO (Pipe l i o u m) where
+    liftIO = lift . liftIO
+    {-# INLINE liftIO #-}
+
+instance MonadThrow m => MonadThrow (Pipe l i o u m) where
+    throwM = lift . throwM
+    {-# INLINE throwM #-}
+
+instance Monad m => Semigroup (Pipe l i o u m ()) where
+    (<>) = (>>)
+    {-# INLINE (<>) #-}
+
+instance Monad m => Monoid (Pipe l i o u m ()) where
+    mempty = return ()
+    {-# INLINE mempty #-}
+#if !(MIN_VERSION_base(4,11,0))
+    mappend = (<>)
+    {-# INLINE mappend #-}
+#endif
+
+instance PrimMonad m => PrimMonad (Pipe l i o u m) where
+  type PrimState (Pipe l i o u m) = PrimState m
+  primitive = lift . primitive
+
+instance MonadResource m => MonadResource (Pipe l i o u m) where
+    liftResourceT = lift . liftResourceT
+    {-# INLINE liftResourceT #-}
+
+instance MonadReader r m => MonadReader r (Pipe l i o u m) where
+    ask = lift ask
+    {-# INLINE ask #-}
+    local f (HaveOutput p o) = HaveOutput (local f p) o
+    local f (NeedInput p c) = NeedInput (\i -> local f (p i)) (\u -> local f (c u))
+    local _ (Done x) = Done x
+    local f (PipeM mp) = PipeM (liftM (local f) $ local f mp)
+    local f (Leftover p i) = Leftover (local f p) i
+
+instance MonadWriter w m => MonadWriter w (Pipe l i o u m) where
+#if MIN_VERSION_mtl(2, 1, 0)
+    writer = lift . writer
+#endif
+    tell = lift . tell
+
+    listen (HaveOutput p o) = HaveOutput (listen p) o
+    listen (NeedInput p c) = NeedInput (\i -> listen (p i)) (\u -> listen (c u))
+    listen (Done x) = Done (x, mempty)
+    listen (PipeM mp) = PipeM $ do
+        (p, w) <- listen mp
+        return $ do
+            (x, w') <- listen p
+            return (x, w `mappend` w')
+    listen (Leftover p i) = Leftover (listen p) i
+
+    pass (HaveOutput p o) = HaveOutput (pass p) o
+    pass (NeedInput p c) = NeedInput (\i -> pass (p i)) (\u -> pass (c u))
+    pass (PipeM mp) = PipeM $ mp >>= (return . pass)
+    pass (Done (x, _)) = Done x
+    pass (Leftover p i) = Leftover (pass p) i
+
+instance MonadState s m => MonadState s (Pipe l i o u m) where
+    get = lift get
+    put = lift . put
+#if MIN_VERSION_mtl(2, 1, 0)
+    state = lift . state
+#endif
+
+instance MonadRWS r w s m => MonadRWS r w s (Pipe l i o u m)
+
+instance MonadError e m => MonadError e (Pipe l i o u m) where
+    throwError = lift . throwError
+    catchError (HaveOutput p o) f = HaveOutput (catchError p f) o
+    catchError (NeedInput p c) f = NeedInput (\i -> catchError (p i) f) (\u -> catchError (c u) f)
+    catchError (Done x) _ = Done x
+    catchError (PipeM mp) f = PipeM $ catchError (liftM (flip catchError f) mp) (\e -> return (f e))
+    catchError (Leftover p i) f = Leftover (catchError p f) i
+
+awaitE :: Pipe l i o u m (Either u i)
+awaitE = NeedInput (Done . Right) (Done . Left)
+{-# RULES "conduit: awaitE >>= either" forall x y. awaitE >>= either x y = NeedInput y x #-}
+{-# INLINE [1] awaitE #-}
+
+awaitP :: Pipe l i o u m (Maybe i)
+awaitP = NeedInput (Done . Just) (\_ -> Done Nothing)
+{-# INLINE [1] awaitP #-}
+
+yieldP :: o -> Pipe l i o u m ()
+yieldP = HaveOutput (Done ())
+{-# INLINE [1] yieldP #-}
+
+pipe :: Monad m => Pipe l a b r0 m r1 -> Pipe Void b c r1 m r2 -> Pipe l a c r0 m r2
+pipe = goRight
+  where
+    goRight left right =
+        case right of
+            HaveOutput p o   -> HaveOutput (recurse p) o
+            NeedInput rp rc  -> goLeft rp rc left
+            Done r2          -> Done r2
+            PipeM mp         -> PipeM (liftM recurse mp)
+            Leftover _ i     -> absurd i
+      where
+        recurse = goRight left
+
+    goLeft rp rc left =
+        case left of
+            HaveOutput left' o        -> goRight left' (rp o)
+            NeedInput left' lc        -> NeedInput (recurse . left') (recurse . lc)
+            Done r1                   -> goRight (Done r1) (rc r1)
+            PipeM mp                  -> PipeM (liftM recurse mp)
+            Leftover left' i          -> Leftover (recurse left') i
+      where
+        recurse = goLeft rp rc
+
+pipeL :: Monad m => Pipe l a b r0 m r1 -> Pipe b b c r1 m r2 -> Pipe l a c r0 m r2
+pipeL = goRight
+  where
+    goRight left right =
+        case right of
+            HaveOutput p o    -> HaveOutput (recurse p) o
+            NeedInput rp rc   -> goLeft rp rc left
+            Done r2           -> Done r2
+            PipeM mp          -> PipeM (liftM recurse mp)
+            Leftover right' i -> goRight (HaveOutput left i) right'
+      where
+        recurse = goRight left
+
+    goLeft rp rc left =
+        case left of
+            HaveOutput left' o        -> goRight left' (rp o)
+            NeedInput left' lc        -> NeedInput (recurse . left') (recurse . lc)
+            Done r1                   -> goRight (Done r1) (rc r1)
+            PipeM mp                  -> PipeM (liftM recurse mp)
+            Leftover left' i          -> Leftover (recurse left') i
+      where
+        recurse = goLeft rp rc
+
+runPipe :: Monad m => Pipe Void () Void () m r -> m r
+runPipe (HaveOutput _ o) = absurd o
+runPipe (NeedInput _ c) = runPipe (c ())
+runPipe (Done r) = return r
+runPipe (PipeM mp) = mp >>= runPipe
+runPipe (Leftover _ i) = absurd i
+
+injectLeftovers :: Monad m => Pipe i i o u m r -> Pipe l i o u m r
+injectLeftovers = go []
+  where
+    go ls (HaveOutput p o) = HaveOutput (go ls p) o
+    go (l:ls) (NeedInput p _) = go ls $ p l
+    go [] (NeedInput p c) = NeedInput (go [] . p) (go [] . c)
+    go _ (Done r) = Done r
+    go ls (PipeM mp) = PipeM (liftM (go ls) mp)
+    go ls (Leftover p l) = go (l:ls) p
+
+withUpstream :: Monad m => Pipe l i o u m r -> Pipe l i o u m (u, r)
+withUpstream down = down >>= go
+  where
+    go r = loop
+      where
+        loop = awaitE >>= either (\u -> return (u, r)) (\_ -> loop)
+
+infixr 9 <+<
+infixl 9 >+>
+
+(>+>) :: Monad m => Pipe l a b r0 m r1 -> Pipe Void b c r1 m r2 -> Pipe l a c r0 m r2
+(>+>) = pipe
+{-# INLINE (>+>) #-}
+
+(<+<) :: Monad m => Pipe Void b c r1 m r2 -> Pipe l a b r0 m r1 -> Pipe l a c r0 m r2
+(<+<) = flip pipe
+{-# INLINE (<+<) #-}
+
+catchP :: (MonadUnliftIO m, Exception e)
+       => Pipe l i o u m r
+       -> (e -> Pipe l i o u m r)
+       -> Pipe l i o u m r
+catchP p0 onErr = go p0
+  where
+    go (Done r) = Done r
+    go (PipeM mp) = PipeM $ withRunInIO $ \run ->
+      E.catch (run (liftM go mp)) (return . onErr)
+    go (Leftover p i) = Leftover (go p) i
+    go (NeedInput x y) = NeedInput (go . x) (go . y)
+    go (HaveOutput p o) = HaveOutput (go p) o
+{-# INLINABLE catchP #-}
+
+handleP :: (MonadUnliftIO m, Exception e)
+        => (e -> Pipe l i o u m r)
+        -> Pipe l i o u m r
+        -> Pipe l i o u m r
+handleP = flip catchP
+{-# INLINE handleP #-}
+
+tryP :: (MonadUnliftIO m, Exception e)
+     => Pipe l i o u m r
+     -> Pipe l i o u m (Either e r)
+tryP p = fmap Right p `catchP` (return . Left)
+{-# INLINABLE tryP #-}
+
+generalizeUpstream :: Monad m => Pipe l i o () m r -> Pipe l i o u m r
+generalizeUpstream = go
+  where
+    go (HaveOutput p o) = HaveOutput (go p) o
+    go (NeedInput x y) = NeedInput (go . x) (\_ -> go (y ()))
+    go (Done r) = Done r
+    go (PipeM mp) = PipeM (liftM go mp)
+    go (Leftover p l) = Leftover (go p) l
+{-# INLINE generalizeUpstream #-}
 
 -- | Core datatype of the conduit package. This type represents a general
 -- component which can consume a stream of input values @i@, produce a stream
@@ -178,10 +418,6 @@ instance MonadReader r m => MonadReader r (ConduitT i o m) where
             go (PipeM mp) = PipeM (liftM go $ local f mp)
             go (Leftover p i) = Leftover (go p) i
          in go (c0 Done)
-
-#ifndef MIN_VERSION_mtl
-#define MIN_VERSION_mtl(x, y, z) 0
-#endif
 
 instance MonadWriter w m => MonadWriter w (ConduitT i o m) where
 #if MIN_VERSION_mtl(2, 1, 0)
@@ -668,7 +904,7 @@ passthroughSink (ConduitT sink0) final = ConduitT $ \rest -> let
     -- values to the inner sink as to downstream.
 
     go mbuf _ (Done r) = do
-        maybe (return ()) CI.yield mbuf
+        maybe (return ()) yieldP mbuf
         lift $ final r
         unConduitT (awaitForever yield) rest
     go mbuf is (Leftover sink i) = go mbuf (i:is) sink
@@ -678,8 +914,8 @@ passthroughSink (ConduitT sink0) final = ConduitT $ \rest -> let
         go mbuf is x
     go mbuf (i:is) (NeedInput next _) = go mbuf is (next i)
     go mbuf [] (NeedInput next done) = do
-        maybe (return ()) CI.yield mbuf
-        mx <- CI.await
+        maybe (return ()) yieldP mbuf
+        mx <- awaitP
         case mx of
             Nothing -> go Nothing [] (done ())
             Just x -> go (Just x) [] (next x)
