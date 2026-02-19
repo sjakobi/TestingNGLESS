@@ -63,7 +63,6 @@ library
     , mtl >=2.2
     , mono-traversable
     , primitive
-    , resourcet >=1.1
     , text
     , transformers
     , unliftio-core
