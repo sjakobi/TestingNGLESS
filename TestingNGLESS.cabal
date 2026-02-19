@@ -23,6 +23,7 @@ library
   exposed-modules:
       Interpret
   other-modules:
+      Data.Conduit.Binary
       Paths_TestingNGLESS
   hs-source-dirs:
       NGLess/
@@ -38,7 +39,7 @@ library
       base
     , bytestring
     , conduit
-    , conduit-extra >=1.1.12
+    , directory
     , mtl >=2.2
     , resourcet >=1.1
     , transformers
@@ -65,7 +66,7 @@ executable testingNGLESS
     , base
     , bytestring
     , conduit
-    , conduit-extra >=1.1.12
+    , directory
     , mtl >=2.2
     , resourcet >=1.1
     , transformers
