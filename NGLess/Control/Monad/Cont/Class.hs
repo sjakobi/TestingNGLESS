@@ -60,13 +60,9 @@ to understand and maintain.
 
 module Control.Monad.Cont.Class (
     MonadCont(..),
-    label,
-    label_,
-    liftCallCC,
   ) where
 
 import Data.Kind (Type)
-import Control.Monad.Fix (fix)
 import Control.Monad.Trans.Cont (ContT)
 import qualified Control.Monad.Trans.Cont as ContT
 import Control.Monad.Trans.Except (ExceptT)
@@ -87,9 +83,6 @@ import Control.Monad.Trans.Accum (AccumT)
 import qualified Control.Monad.Trans.Accum as Accum
 import qualified Control.Monad.Trans.RWS.CPS as CPSRWS
 import qualified Control.Monad.Trans.Writer.CPS as CPSWriter
-import Control.Monad.Trans.Class (MonadTrans (lift))
-import Control.Monad.Signatures (CallCC)
-import Control.Monad (join)
 
 class Monad m => MonadCont (m :: Type -> Type) where
     {- | @callCC@ (call-with-current-continuation)
@@ -165,45 +158,3 @@ instance
   , MonadCont m
   ) => MonadCont (AccumT w m) where
     callCC = Accum.liftCallCC callCC
-
--- | Introduces a recursive binding to the continuation.
--- Due to the use of @callCC@, calling the continuation will interrupt execution
--- of the current block creating an effect similar to goto/setjmp in C.
---
--- @since 2.3.1
---
-label :: MonadCont m  => a -> m (a -> m b, a)
-label a = callCC $ \k -> let go b = k (go, b) in return (go, a)
-
--- | Simplified version of `label` without arguments.
--- 
--- @since 2.3.1
---
-label_ :: MonadCont m => m (m a)
-label_ = callCC $ return . fix
-
--- | Lift a 'ContT.callCC'-style function through any 'MonadTrans'. 
---
--- = Note
---
--- For any function @f@, @'liftCallCC f'@ satisfies the [uniformity
--- condition](https://hackage.haskell.org/package/transformers-0.5.6.2/docs/Control-Monad-Signatures.html#t:CallCC)
--- provided that @f@ is quasi-algebraic. More specifically, for any @g@, we must have:
---
--- > 'join' '$' f (\exit -> 'pure' '$' g (exit '.' 'pure') = f g
---
--- 'ContT.callCC' is quasi-algebraic; furthermore, for any quasi-algebraic @f@,
--- @'liftCallCC' f@ is also quasi-algebraic. 
---
--- = See also
---
--- * [Proof of quasi-algebraic
--- properties](https://gist.github.com/KingoftheHomeless/5927257cc7f6f8a2da685a2045dac204)
--- * [Original issue](https://github.com/haskell/mtl/issues/77)
---
--- @since 2.3.1
-liftCallCC :: 
-  forall (t :: (Type -> Type) -> Type -> Type) (m :: Type -> Type) (a :: Type) (b :: Type) . 
-  (MonadTrans t, Monad m, forall (m' :: Type -> Type) . Monad m' => Monad (t m')) => 
-  CallCC m (t m a) b -> CallCC (t m) a b
-liftCallCC f g = join . lift . f $ \exit -> pure $ g (lift . exit . pure)
