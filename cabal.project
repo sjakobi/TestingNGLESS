@@ -1,2 +1,5 @@
 packages:
   .
+
+package TestingNGLESS
+  ghc-options: -ddump-simpl -dsuppress-uniques -ddump-to-file -dsuppress-module-prefixes
