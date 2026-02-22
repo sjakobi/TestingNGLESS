@@ -19,8 +19,6 @@ Build with `-O2` and run
     hp2pretty testingNGLESS_O2.hp
 ```
 
-This is the result (increasing memory usage, up to 150M in 3.5 seconds):
-
 ![Heap trace](testingNGLESS_O2.svg)
 
 # Build without O2
@@ -30,7 +28,6 @@ This is the result (increasing memory usage, up to 150M in 3.5 seconds):
     /usr/bin/time -v /tmp/testingNGLESS_O0 +RTS -hT -i0.01 -potestingNGLESS-FAST -RTS
     hp2pretty testingNGLESS-FAST.hp
 ```
-This is the result (roughly stable memory usage, maximum usage around 11MB)
 
 ![Heap trace](testingNGLESS-FAST.svg)
 
